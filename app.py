@@ -154,8 +154,8 @@ def get_vesync_weight():
         }
 
     # Fallback: V2 endpoint (BT-only scales, returns weightG in grams)
-    # Paginate ascending until the last page, then take the final record
-    latest_record = None
+    # Collect all pages, pick the record with the highest timestamp
+    all_records = []
     for page in range(1, 21):  # cap at 20 pages (~2000 records)
         v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
         v2_body.update({'configModule': config_module, 'pageSize': 100, 'page': page, 'allData': True})
@@ -164,14 +164,12 @@ def get_vesync_weight():
             headers=hdrs, json=v2_body, timeout=10
         ).json()
         page_records = v2.get('result', {}).get('weightDatas', []) if v2.get('code') == 0 else []
-        if not page_records:
-            break
-        latest_record = page_records[-1]  # last record on each page = most recent so far
-        if len(page_records) < 100:
+        all_records.extend(page_records)
+        if not page_records or len(page_records) < 100:
             break  # final page
 
-    if latest_record:
-        r = latest_record
+    if all_records:
+        r = max(all_records, key=lambda x: x.get('timestamp', 0))
         weight_g = r.get('weightG')
         weight_kg = weight_g / 1000 if weight_g else None
         weight_lbs = round(weight_g / 453.592, 1) if weight_g else None
