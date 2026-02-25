@@ -23,6 +23,9 @@ WITHINGS_CLIENT_SECRET = os.environ.get('WITHINGS_CLIENT_SECRET')
 WITHINGS_REDIRECT_URI = 'https://garmin-sleep-api.onrender.com/withings/callback'
 WITHINGS_TOKEN_FILE = os.path.join(os.path.dirname(__file__), 'withings_token.json')
 
+# In-memory token cache (survives across requests within same process)
+_withings_token_cache = None
+
 def _load_weight_log():
     try:
         with open(WEIGHT_LOG) as f:
@@ -226,15 +229,35 @@ def get_client():
 # ── WITHINGS ──────────────────────────────────────────────────
 
 def _load_withings_token():
+    global _withings_token_cache
+    # 1. In-memory cache (fastest, survives across requests)
+    if _withings_token_cache:
+        return _withings_token_cache
+    # 2. File on disk (survives process restart if disk persists)
     try:
         with open(WITHINGS_TOKEN_FILE) as f:
-            return json.load(f)
+            _withings_token_cache = json.load(f)
+            return _withings_token_cache
     except Exception:
-        return None
+        pass
+    # 3. Env var WITHINGS_TOKEN (JSON string — survives deploys)
+    env_token = os.environ.get('WITHINGS_TOKEN')
+    if env_token:
+        try:
+            _withings_token_cache = json.loads(env_token)
+            return _withings_token_cache
+        except Exception:
+            pass
+    return None
 
 def _save_withings_token(data):
-    with open(WITHINGS_TOKEN_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+    global _withings_token_cache
+    _withings_token_cache = data
+    try:
+        with open(WITHINGS_TOKEN_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
 def _refresh_withings_token(token_data):
     """Refresh an expired Withings access token."""
@@ -386,8 +409,12 @@ def withings_callback():
         'userid': body.get('userid'),
     }
     _save_withings_token(token_data)
-    return jsonify({'status': 'ok', 'message': 'Withings connected successfully',
-                    'userid': body.get('userid')})
+    return jsonify({
+        'status': 'ok',
+        'message': 'Withings connected! Copy the token below into Render env var WITHINGS_TOKEN to persist across deploys.',
+        'userid': body.get('userid'),
+        'token_for_env_var': json.dumps(token_data),
+    })
 
 
 @app.route('/withings/weight')
