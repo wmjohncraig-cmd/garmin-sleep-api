@@ -1,7 +1,7 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 import garth, os
-from datetime import date, timedelta
+from datetime import date
 
 app = Flask(__name__)
 CORS(app)
@@ -26,21 +26,20 @@ def garmin_sleep():
     try:
         client = get_client()
         today = date.today().isoformat()
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        sleep = client.connectapi(f'/wellness-service/wellness/dailySleepData/wm.john.craig@gmail.com?date={today}&nonSleepBufferMinutes=60')
+        sleep = client.connectapi('/wellness-service/wellness/dailySleepData/' + GARMIN_EMAIL + '?date=' + today + '&nonSleepBufferMinutes=60')
         sleep_data = sleep.get('dailySleepDTO', {})
         sleep_score = sleep_data.get('sleepScores', {}).get('overall', {}).get('value', None)
         sleep_seconds = sleep_data.get('sleepTimeSeconds', 0)
         sleep_hours = round(sleep_seconds / 3600, 1) if sleep_seconds else None
-        bb_data = client.connectapi(f'/wellness-service/wellness/bodyBattery/readingsByDate/{yesterday}/{today}')
-        body_battery = max([r.get('charged', 0) for r in bb_data if r.get('charged')]) if bb_data else None
-        hrv = client.connectapi(f'/hrv-service/hrv/{today}')
-        hrv_value = hrv.get('hrvSummary', {}).get('lastNight', None) if hrv else None
+        bb_data = sleep.get('sleepBodyBattery', [])
+        body_battery = max([r.get('value', 0) for r in bb_data if r.get('value')]) if bb_data else None
+        hrv_value = sleep.get('avgOvernightHrv', None)
         readiness = None
         try:
-            tr = client.connectapi(f'/metrics-service/metrics/trainingReadiness/{today}')
+            tr = client.connectapi('/metrics-service/metrics/trainingReadiness/' + today)
             readiness = tr[0].get('score') if isinstance(tr, list) and tr else None
-        except: pass
+        except:
+            pass
         return jsonify({'date': today, 'sleep_score': sleep_score, 'sleep_hours': sleep_hours, 'hrv': hrv_value, 'body_battery': body_battery, 'readiness': readiness})
     except Exception as e:
         global _client
