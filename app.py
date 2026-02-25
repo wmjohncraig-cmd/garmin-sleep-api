@@ -1,0 +1,51 @@
+from flask import Flask, jsonify
+from flask_cors import CORS
+import garth, os
+from datetime import date, timedelta
+
+app = Flask(__name__)
+CORS(app)
+
+GARMIN_EMAIL = os.environ.get('GARMIN_EMAIL')
+GARMIN_PASSWORD = os.environ.get('GARMIN_PASSWORD')
+_client = None
+
+def get_client():
+    global _client
+    if _client is None:
+        _client = garth.Client()
+        _client.login(GARMIN_EMAIL, GARMIN_PASSWORD)
+    return _client
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'})
+
+@app.route('/garmin-sleep')
+def garmin_sleep():
+    try:
+        client = get_client()
+        today = date.today().isoformat()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        sleep = client.connectapi(f'/wellness-service/wellness/dailySleepData/wm.john.craig@gmail.com?date={today}&nonSleepBufferMinutes=60')
+        sleep_data = sleep.get('dailySleepDTO', {})
+        sleep_score = sleep_data.get('sleepScores', {}).get('overall', {}).get('value', None)
+        sleep_seconds = sleep_data.get('sleepTimeSeconds', 0)
+        sleep_hours = round(sleep_seconds / 3600, 1) if sleep_seconds else None
+        bb_data = client.connectapi(f'/wellness-service/wellness/bodyBattery/readingsByDate/{yesterday}/{today}')
+        body_battery = max([r.get('charged', 0) for r in bb_data if r.get('charged')]) if bb_data else None
+        hrv = client.connectapi(f'/hrv-service/hrv/{today}')
+        hrv_value = hrv.get('hrvSummary', {}).get('lastNight', None) if hrv else None
+        readiness = None
+        try:
+            tr = client.connectapi(f'/metrics-service/metrics/trainingReadiness/{today}')
+            readiness = tr[0].get('score') if isinstance(tr, list) and tr else None
+        except: pass
+        return jsonify({'date': today, 'sleep_score': sleep_score, 'sleep_hours': sleep_hours, 'hrv': hrv_value, 'body_battery': body_battery, 'readiness': readiness})
+    except Exception as e:
+        global _client
+        _client = None
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
