@@ -424,6 +424,9 @@ Be direct and critical. Flag anything that could prevent a sub-10 Ironman finish
 8. Weekly TSS distribution — run:bike:swim ratio 35:45:20
 9. Recovery adequacy — TSB should not go below -30
 10. Race day readiness trajectory
+11. VO2 Max work — athlete should have at least 1 session per week where HR exceeds 163 bpm. Flag if no activity in last 7 days shows max HR above 163.
+12. Threshold work — at least 2 sessions per week should show sustained HR 150-162 for 20+ minutes. Flag if missing.
+13. HR ceiling — if max HR across all activities this week is under 155, flag as HIGH severity: "No high-intensity work detected. VO2 and threshold underdeveloped. Sub-10 requires all three energy systems."
 
 Return ONLY a JSON object (no markdown, no code fences):
 {
