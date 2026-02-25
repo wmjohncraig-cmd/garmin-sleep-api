@@ -99,7 +99,7 @@ def get_vesync_weight():
     devices = dev_resp.get('result', {}).get('list', [])
     scale = next(
         (d for d in devices if any(
-            x in d.get('deviceType', '') for x in ['ESF', 'Scale', 'scale']
+            x in d.get('deviceType', '') for x in ['EFS', 'ESF', 'Scale', 'scale']
         )), None
     )
     if not scale:
@@ -107,7 +107,7 @@ def get_vesync_weight():
         raise Exception(f'No scale found in device list: {types}')
 
     config_module = scale.get('configModule', '')
-    cid = scale.get('cid', '')
+    cid = scale.get('cid') or scale.get('uuid') or scale.get('deviceId') or ''
     now_ts = int(time.time())
     ts = str(int(time.time() * 1000))
 
@@ -249,14 +249,16 @@ def weight_debug():
         # Find scale
         scale = next(
             (d for d in devices if any(
-                x in d.get('deviceType', '') for x in ['ESF', 'Scale', 'scale']
+                x in d.get('deviceType', '') for x in ['EFS', 'ESF', 'Scale', 'scale']
             )), None
         )
         info['scale_found'] = scale.get('deviceType') if scale else None
 
         if scale:
             config_module = scale.get('configModule', '')
-            cid = scale.get('cid', '')
+            cid = scale.get('cid') or scale.get('uuid') or scale.get('deviceId') or ''
+            info['scale_cid'] = cid
+            info['scale_config_module'] = config_module
             now_ts = int(time.time())
 
             v1_body = _vsync_base_body(token, account_id, 'getWeighData')
