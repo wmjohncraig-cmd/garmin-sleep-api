@@ -1,7 +1,8 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect
 from flask_cors import CORS
 import garth, os, time, hashlib, requests as req_lib, json
 from datetime import date, timedelta
+from urllib.parse import urlencode
 
 app = Flask(__name__)
 CORS(app)
@@ -16,6 +17,11 @@ VESYNC_BASE = 'https://smartapi.vesync.com'
 
 MANUAL_WEIGHT_LBS = os.environ.get('MANUAL_WEIGHT_LBS')
 WEIGHT_LOG = os.path.join(os.path.dirname(__file__), 'weight_log.json')
+
+WITHINGS_CLIENT_ID = os.environ.get('WITHINGS_CLIENT_ID')
+WITHINGS_CLIENT_SECRET = os.environ.get('WITHINGS_CLIENT_SECRET')
+WITHINGS_REDIRECT_URI = 'https://garmin-sleep-api.onrender.com/withings/callback'
+WITHINGS_TOKEN_FILE = os.path.join(os.path.dirname(__file__), 'withings_token.json')
 
 def _load_weight_log():
     try:
@@ -216,6 +222,164 @@ def get_client():
         _client.login(GARMIN_EMAIL, GARMIN_PASSWORD)
     return _client
 
+
+# ── WITHINGS ──────────────────────────────────────────────────
+
+def _load_withings_token():
+    try:
+        with open(WITHINGS_TOKEN_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _save_withings_token(data):
+    with open(WITHINGS_TOKEN_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def _refresh_withings_token(token_data):
+    """Refresh an expired Withings access token."""
+    resp = req_lib.post('https://wbsapi.withings.net/v2/oauth2', data={
+        'action': 'requesttoken',
+        'grant_type': 'refresh_token',
+        'client_id': WITHINGS_CLIENT_ID,
+        'client_secret': WITHINGS_CLIENT_SECRET,
+        'refresh_token': token_data['refresh_token'],
+    }, timeout=10).json()
+    body = resp.get('body', {})
+    if resp.get('status') != 0 or not body.get('access_token'):
+        raise Exception(f"Withings token refresh failed: {resp}")
+    new_data = {
+        'access_token': body['access_token'],
+        'refresh_token': body['refresh_token'],
+        'expires_at': int(time.time()) + body.get('expires_in', 10800),
+    }
+    _save_withings_token(new_data)
+    return new_data
+
+def _get_withings_access_token():
+    """Return a valid access token, refreshing if expired."""
+    token_data = _load_withings_token()
+    if not token_data:
+        raise Exception('Withings not authorized. Visit /withings/auth to connect.')
+    if time.time() >= token_data.get('expires_at', 0) - 60:
+        token_data = _refresh_withings_token(token_data)
+    return token_data['access_token']
+
+# Withings measure type IDs → field names
+_WITHINGS_TYPES = {
+    1:  'weight_kg',
+    6:  'body_fat_pct',
+    8:  'fat_mass_kg',
+    5:  'fat_free_mass_kg',
+    76: 'muscle_mass_kg',
+    88: 'bone_mass_kg',
+    77: 'body_water_pct',
+    73: 'visceral_fat',
+}
+
+def get_withings_weight():
+    """Fetch latest Withings measurement with full body composition."""
+    access_token = _get_withings_access_token()
+    resp = req_lib.post('https://wbsapi.withings.net/measure', data={
+        'action': 'getmeas',
+        'meastype': ','.join(str(t) for t in _WITHINGS_TYPES.keys()),
+        'category': 1,  # real measurements only
+        'lastupdate': 0,
+    }, headers={
+        'Authorization': f'Bearer {access_token}',
+    }, timeout=10).json()
+
+    if resp.get('status') != 0:
+        raise Exception(f"Withings API error: {resp}")
+
+    groups = resp.get('body', {}).get('measuregrps', [])
+    if not groups:
+        raise Exception('No Withings measurements found')
+
+    # Most recent group first (API returns descending by date)
+    grp = groups[0]
+    ts = grp.get('date', 0)
+    date_str = date.fromtimestamp(ts).isoformat() if ts else date.today().isoformat()
+
+    # Parse measures: value * 10^unit
+    metrics = {}
+    for m in grp.get('measures', []):
+        mtype = m.get('type')
+        if mtype in _WITHINGS_TYPES:
+            val = m['value'] * (10 ** m['unit'])
+            metrics[_WITHINGS_TYPES[mtype]] = val
+
+    weight_kg = metrics.get('weight_kg')
+    weight_lbs = round(weight_kg * 2.20462, 1) if weight_kg else None
+
+    result = {
+        'weight_lbs': weight_lbs,
+        'date': date_str,
+        'unit': 'lbs',
+        'source': 'withings',
+        'body_fat_pct': round(metrics['body_fat_pct'], 1) if 'body_fat_pct' in metrics else None,
+        'muscle_mass_lbs': round(metrics['muscle_mass_kg'] * 2.20462, 1) if 'muscle_mass_kg' in metrics else None,
+        'bone_mass_lbs': round(metrics['bone_mass_kg'] * 2.20462, 1) if 'bone_mass_kg' in metrics else None,
+        'fat_free_weight_lbs': round(metrics['fat_free_mass_kg'] * 2.20462, 1) if 'fat_free_mass_kg' in metrics else None,
+        'body_water_pct': round(metrics['body_water_pct'], 1) if 'body_water_pct' in metrics else None,
+        'visceral_fat': round(metrics['visceral_fat']) if 'visceral_fat' in metrics else None,
+        'bmi': round(weight_kg / (1.78 ** 2), 1) if weight_kg else None,  # 5'10" = 1.78m
+    }
+    return result
+
+
+@app.route('/withings/auth')
+def withings_auth():
+    if not WITHINGS_CLIENT_ID:
+        return jsonify({'error': 'WITHINGS_CLIENT_ID not configured'}), 500
+    params = urlencode({
+        'response_type': 'code',
+        'client_id': WITHINGS_CLIENT_ID,
+        'redirect_uri': WITHINGS_REDIRECT_URI,
+        'scope': 'user.metrics',
+        'state': 'imtx',
+    })
+    return redirect(f'https://account.withings.com/oauth2_user/authorize2?{params}')
+
+
+@app.route('/withings/callback')
+def withings_callback():
+    code = request.args.get('code')
+    if not code:
+        return jsonify({'error': 'No authorization code received',
+                        'args': dict(request.args)}), 400
+    resp = req_lib.post('https://wbsapi.withings.net/v2/oauth2', data={
+        'action': 'requesttoken',
+        'grant_type': 'authorization_code',
+        'client_id': WITHINGS_CLIENT_ID,
+        'client_secret': WITHINGS_CLIENT_SECRET,
+        'code': code,
+        'redirect_uri': WITHINGS_REDIRECT_URI,
+    }, timeout=10).json()
+
+    body = resp.get('body', {})
+    if resp.get('status') != 0 or not body.get('access_token'):
+        return jsonify({'error': 'Token exchange failed', 'response': resp}), 500
+
+    token_data = {
+        'access_token': body['access_token'],
+        'refresh_token': body['refresh_token'],
+        'expires_at': int(time.time()) + body.get('expires_in', 10800),
+        'userid': body.get('userid'),
+    }
+    _save_withings_token(token_data)
+    return jsonify({'status': 'ok', 'message': 'Withings connected successfully',
+                    'userid': body.get('userid')})
+
+
+@app.route('/withings/weight')
+def withings_weight():
+    try:
+        return jsonify(get_withings_weight())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok'})
@@ -265,31 +429,45 @@ def garmin_sleep():
 
 @app.route('/weight')
 def weight():
-    vesync_data = None
-    vesync_err  = None
+    best_data = None
+    best_date = ''
+    last_err  = None
 
-    # 1. Try VeSync API
+    # 1. Try Withings (highest priority — real body comp data)
     try:
-        vesync_data = get_vesync_weight()
+        withings = get_withings_weight()
+        if withings.get('weight_lbs') and withings.get('date', '') >= best_date:
+            best_data = withings
+            best_date = withings['date']
     except Exception as e:
-        vesync_err = e
+        last_err = e
 
-    # 2. Check manual log — use if more recent than VeSync result
+    # 2. Try VeSync API
+    try:
+        vesync = get_vesync_weight()
+        if vesync.get('weight_lbs') and vesync.get('date', '') >= best_date:
+            best_data = vesync
+            best_date = vesync['date']
+    except Exception as e:
+        if not last_err:
+            last_err = e
+
+    # 3. Check manual log — use if more recent
     try:
         entries = _load_weight_log()
         if entries:
             latest = sorted(entries, key=lambda e: e.get('date', ''))[-1]
-            vesync_date = vesync_data.get('date', '') if vesync_data else ''
-            if latest.get('date', '') >= vesync_date:
-                return jsonify({**latest, 'unit': 'lbs'})
+            if latest.get('date', '') >= best_date:
+                best_data = {**latest, 'unit': 'lbs'}
+                best_date = latest['date']
     except Exception:
         pass
 
-    # 3. Return VeSync data if we got it
-    if vesync_data:
-        return jsonify(vesync_data)
+    # 4. Return best result
+    if best_data:
+        return jsonify(best_data)
 
-    # 4. Fall back to MANUAL_WEIGHT_LBS env var
+    # 5. Fall back to MANUAL_WEIGHT_LBS env var
     if MANUAL_WEIGHT_LBS:
         try:
             return jsonify({
@@ -301,7 +479,7 @@ def weight():
         except Exception:
             pass
 
-    return jsonify({'error': str(vesync_err)}), 500
+    return jsonify({'error': str(last_err)}), 500
 
 
 @app.route('/weight/manual', methods=['POST'])
