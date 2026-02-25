@@ -1,8 +1,7 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
-import garth, os, time, requests as req_lib
+import garth, os, time, hashlib, requests as req_lib
 from datetime import date, timedelta
-from pyvesync import VeSync
 
 app = Flask(__name__)
 CORS(app)
@@ -51,13 +50,36 @@ def _calc_bmi_and_bf(weight_kg, height_cm, age, gender_str):
         body_fat = round(1.20 * bmi + 0.23 * int(age) - 10.8 * is_male - 5.4, 1)
     return bmi, body_fat
 
-def get_vesync_weight():
-    manager = VeSync(VESYNC_EMAIL, VESYNC_PASSWORD, 'America/Chicago')
-    if not manager.login():
-        raise Exception('VeSync login failed')
+def _vesync_login():
+    """Authenticate with VeSync API, return (token, account_id)."""
+    body = {
+        'timeZone': 'America/Chicago',
+        'acceptLanguage': 'en',
+        'appVersion': '2.8.6',
+        'phoneBrand': 'SM N9005',
+        'phoneOS': 'Android',
+        'traceId': str(int(time.time())),
+        'email': VESYNC_EMAIL,
+        'password': hashlib.md5(VESYNC_PASSWORD.encode('utf-8')).hexdigest(),
+        'devToken': '',
+        'userType': '1',
+        'method': 'login',
+    }
+    resp = req_lib.post(
+        f'{VESYNC_BASE}/cloud/v1/user/login',
+        json=body,
+        headers={'Content-Type': 'application/json; charset=UTF-8',
+                 'User-Agent': 'okhttp/3.12.1'},
+        timeout=10
+    ).json()
+    if resp.get('code') != 0:
+        raise Exception(f"VeSync login failed: {resp.get('msg', resp)}")
+    token = resp['result']['token']
+    account_id = resp['result']['accountID']
+    return token, account_id
 
-    token = manager.token
-    account_id = manager.account_id
+def get_vesync_weight():
+    token, account_id = _vesync_login()
     hdrs = _vsync_hdrs(token, account_id)
 
     # Get device list to find the scale's configModule + cid
