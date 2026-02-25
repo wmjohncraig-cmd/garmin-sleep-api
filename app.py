@@ -408,5 +408,73 @@ def weight_debug():
     return jsonify(info)
 
 
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
+
+AUDIT_SYSTEM_PROMPT = """You are a world-class Ironman triathlon coaching auditor.
+Your job is to review the following Coach Brief and identify any gaps, risks, or suboptimal programming decisions.
+Be direct and critical. Flag anything that could prevent a sub-10 Ironman finish. Check:
+
+1. CTL ramp rate — should be +1 to +3 TSS/week in build phase
+2. Run volume — minimum 25 miles/week by race minus 8 weeks
+3. Long run presence — must appear weekly
+4. Swim pace progression toward 1:48/100yd target
+5. Nutrition flags — any bonking or underfueling patterns
+6. Sleep — Deep+REM under 3hrs should modify next day load
+7. Bike intensity — NP should progress toward 238W race target
+8. Weekly TSS distribution — run:bike:swim ratio 35:45:20
+9. Recovery adequacy — TSB should not go below -30
+10. Race day readiness trajectory
+
+Return ONLY a JSON object (no markdown, no code fences):
+{
+  "overall_risk": "LOW/MEDIUM/HIGH",
+  "sub10_trajectory": "ON TRACK/NEEDS WORK/AT RISK",
+  "flags": [
+    {
+      "category": "CATEGORY NAME",
+      "severity": "HIGH/MEDIUM/LOW",
+      "issue": "description",
+      "recommendation": "specific fix"
+    }
+  ],
+  "green_lights": ["things going well"],
+  "tomorrow_modification": "any changes to prescribed workout or NONE"
+}"""
+
+@app.route('/coaching-audit', methods=['POST'])
+def coaching_audit():
+    if not ANTHROPIC_API_KEY:
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured'}), 500
+    body = request.get_json(force=True) or {}
+    brief = body.get('brief', '')
+    if not brief:
+        return jsonify({'error': 'brief text required'}), 400
+    try:
+        resp = req_lib.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            },
+            json={
+                'model': 'claude-sonnet-4-20250514',
+                'max_tokens': 2048,
+                'system': AUDIT_SYSTEM_PROMPT,
+                'messages': [{'role': 'user', 'content': brief}],
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data['content'][0]['text']
+        audit = json.loads(text)
+        return jsonify(audit)
+    except json.JSONDecodeError:
+        return jsonify({'error': 'Failed to parse audit response', 'raw': text}), 502
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
