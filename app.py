@@ -52,6 +52,12 @@ def _calc_bmi_and_bf(weight_kg, height_cm, age, gender_str):
 
 def _vesync_login():
     """Authenticate with VeSync API, return (token, account_id)."""
+    if not VESYNC_EMAIL or not VESYNC_PASSWORD:
+        raise Exception(
+            f"VeSync credentials missing from environment: "
+            f"VESYNC_EMAIL={'set' if VESYNC_EMAIL else 'NOT SET'}, "
+            f"VESYNC_PASSWORD={'set' if VESYNC_PASSWORD else 'NOT SET'}"
+        )
     body = {
         'timeZone': 'America/Chicago',
         'acceptLanguage': 'en',
@@ -130,6 +136,7 @@ def get_vesync_weight():
             'body_fat_pct': body_fat,
             'bmi': bmi,
             'date': date_str,
+            'unit': 'lbs',
         }
 
     # Fallback: V2 endpoint (BT-only scales, returns weightG in grams)
@@ -154,6 +161,7 @@ def get_vesync_weight():
             'body_fat_pct': body_fat,
             'bmi': bmi,
             'date': date_str,
+            'unit': 'lbs',
         }
 
     raise Exception(f'No weight records in V1 or V2 response. V1={v1}, V2={v2}')
@@ -201,6 +209,80 @@ def weight():
         return jsonify(data)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/weight/debug')
+def weight_debug():
+    info = {
+        'env': {
+            'VESYNC_EMAIL': VESYNC_EMAIL if VESYNC_EMAIL else 'NOT SET',
+            'VESYNC_PASSWORD': 'set' if VESYNC_PASSWORD else 'NOT SET',
+        },
+        'login': None,
+        'devices': None,
+        'v1_raw': None,
+        'v2_raw': None,
+        'error': None,
+    }
+    try:
+        if not VESYNC_EMAIL or not VESYNC_PASSWORD:
+            info['error'] = 'Missing credentials (see env)'
+            return jsonify(info), 500
+
+        # Attempt login
+        token, account_id = _vesync_login()
+        info['login'] = {'status': 'ok', 'account_id': account_id}
+        hdrs = _vsync_hdrs(token, account_id)
+
+        # List devices
+        dev_body = _vsync_base_body(token, account_id, 'devices')
+        dev_body.update({'pageNo': '1', 'pageSize': '100'})
+        dev_resp = req_lib.post(
+            f'{VESYNC_BASE}/cloud/v2/deviceManaged/devices',
+            headers=hdrs, json=dev_body, timeout=10
+        ).json()
+        devices = dev_resp.get('result', {}).get('list', [])
+        info['devices'] = [
+            {'deviceName': d.get('deviceName'), 'deviceType': d.get('deviceType'), 'cid': d.get('cid')}
+            for d in devices
+        ]
+
+        # Find scale
+        scale = next(
+            (d for d in devices if any(
+                x in d.get('deviceType', '') for x in ['ESF', 'Scale', 'scale']
+            )), None
+        )
+        info['scale_found'] = scale.get('deviceType') if scale else None
+
+        if scale:
+            config_module = scale.get('configModule', '')
+            cid = scale.get('cid', '')
+            now_ts = int(time.time())
+
+            v1_body = _vsync_base_body(token, account_id, 'getWeighData')
+            v1_body.update({
+                'startTime': 0, 'endTime': now_ts,
+                'configModule': config_module, 'cid': cid,
+                'pageSize': 1, 'order': 'desc', 'index': 0, 'flag': 1,
+            })
+            info['v1_raw'] = req_lib.post(
+                f'{VESYNC_BASE}/cloud/v1/deviceManaged/fatScale/getWeighData',
+                headers=hdrs, json=v1_body, timeout=10
+            ).json()
+
+            v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
+            v2_body.update({'configModule': config_module, 'pageSize': 1, 'page': 1, 'allData': True})
+            info['v2_raw'] = req_lib.post(
+                f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
+                headers=hdrs, json=v2_body, timeout=10
+            ).json()
+
+    except Exception as e:
+        info['error'] = str(e)
+        return jsonify(info), 500
+
+    return jsonify(info)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
