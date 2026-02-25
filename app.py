@@ -140,16 +140,24 @@ def get_vesync_weight():
         }
 
     # Fallback: V2 endpoint (BT-only scales, returns weightG in grams)
-    v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
-    v2_body.update({'configModule': config_module, 'pageSize': 1, 'page': 1, 'order': 'desc'})
-    v2 = req_lib.post(
-        f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
-        headers=hdrs, json=v2_body, timeout=10
-    ).json()
+    # Paginate ascending until the last page, then take the final record
+    latest_record = None
+    for page in range(1, 21):  # cap at 20 pages (~2000 records)
+        v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
+        v2_body.update({'configModule': config_module, 'pageSize': 100, 'page': page, 'allData': True})
+        v2 = req_lib.post(
+            f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
+            headers=hdrs, json=v2_body, timeout=10
+        ).json()
+        page_records = v2.get('result', {}).get('weightDatas', []) if v2.get('code') == 0 else []
+        if not page_records:
+            break
+        latest_record = page_records[-1]  # last record on each page = most recent so far
+        if len(page_records) < 100:
+            break  # final page
 
-    records = v2.get('result', {}).get('weightDatas', [])
-    if records:
-        r = records[0]
+    if latest_record:
+        r = latest_record
         weight_g = r.get('weightG')
         weight_kg = weight_g / 1000 if weight_g else None
         weight_lbs = round(weight_g / 453.592, 1) if weight_g else None
@@ -272,12 +280,20 @@ def weight_debug():
                 headers=hdrs, json=v1_body, timeout=10
             ).json()
 
-            v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
-            v2_body.update({'configModule': config_module, 'pageSize': 1, 'page': 1, 'order': 'desc'})
-            info['v2_raw'] = req_lib.post(
-                f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
-                headers=hdrs, json=v2_body, timeout=10
-            ).json()
+            last_page_resp = None
+            for page in range(1, 21):
+                v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
+                v2_body.update({'configModule': config_module, 'pageSize': 100, 'page': page, 'allData': True})
+                resp = req_lib.post(
+                    f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
+                    headers=hdrs, json=v2_body, timeout=10
+                ).json()
+                page_records = resp.get('result', {}).get('weightDatas', []) if resp.get('code') == 0 else []
+                last_page_resp = resp
+                if not page_records or len(page_records) < 100:
+                    info['v2_pages_fetched'] = page
+                    break
+            info['v2_raw'] = last_page_resp
 
     except Exception as e:
         info['error'] = str(e)
