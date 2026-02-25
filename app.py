@@ -1,6 +1,6 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-import garth, os, time, hashlib, requests as req_lib
+import garth, os, time, hashlib, requests as req_lib, json
 from datetime import date, timedelta
 
 app = Flask(__name__)
@@ -13,6 +13,20 @@ _client = None
 VESYNC_EMAIL = os.environ.get('VESYNC_EMAIL')
 VESYNC_PASSWORD = os.environ.get('VESYNC_PASSWORD')
 VESYNC_BASE = 'https://smartapi.vesync.com'
+
+MANUAL_WEIGHT_LBS = os.environ.get('MANUAL_WEIGHT_LBS')
+WEIGHT_LOG = os.path.join(os.path.dirname(__file__), 'weight_log.json')
+
+def _load_weight_log():
+    try:
+        with open(WEIGHT_LOG) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _save_weight_log(entries):
+    with open(WEIGHT_LOG, 'w') as f:
+        json.dump(entries, f, indent=2)
 
 def _vsync_hdrs(token, account_id):
     return {
@@ -212,11 +226,56 @@ def garmin_sleep():
 
 @app.route('/weight')
 def weight():
+    # 1. Try VeSync API
     try:
         data = get_vesync_weight()
         return jsonify(data)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except Exception as vesync_err:
+        pass
+
+    # 2. Fall back to most recent manual log entry
+    try:
+        entries = _load_weight_log()
+        if entries:
+            latest = sorted(entries, key=lambda e: e.get('date', ''))[-1]
+            return jsonify({**latest, 'unit': 'lbs', 'source': 'manual_log'})
+    except Exception:
+        pass
+
+    # 3. Fall back to MANUAL_WEIGHT_LBS env var
+    if MANUAL_WEIGHT_LBS:
+        try:
+            return jsonify({
+                'weight_lbs': round(float(MANUAL_WEIGHT_LBS), 1),
+                'date': date.today().isoformat(),
+                'unit': 'lbs',
+                'source': 'manual_env',
+            })
+        except Exception:
+            pass
+
+    return jsonify({'error': str(vesync_err)}), 500
+
+
+@app.route('/weight/manual', methods=['POST'])
+def weight_manual():
+    body = request.get_json(force=True) or {}
+    weight_lbs = body.get('weight_lbs')
+    date_str   = body.get('date', date.today().isoformat())
+    if weight_lbs is None:
+        return jsonify({'error': 'weight_lbs required'}), 400
+    entry = {
+        'date': date_str,
+        'weight_lbs': round(float(weight_lbs), 1),
+        'source': 'manual',
+    }
+    entries = _load_weight_log()
+    # Replace existing entry for same date, or append
+    entries = [e for e in entries if e.get('date') != date_str]
+    entries.append(entry)
+    entries.sort(key=lambda e: e.get('date', ''))
+    _save_weight_log(entries)
+    return jsonify(entry)
 
 @app.route('/weight/debug')
 def weight_debug():
