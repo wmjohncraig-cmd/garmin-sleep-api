@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, redirect
+from flask import Flask, jsonify, request, redirect, make_response
 from flask_cors import CORS
 import garth, os, time, hashlib, requests as req_lib, json
 from datetime import date, timedelta
@@ -409,12 +409,19 @@ def withings_callback():
         'userid': body.get('userid'),
     }
     _save_withings_token(token_data)
-    return jsonify({
-        'status': 'ok',
-        'message': 'Withings connected! Copy the token below into Render env var WITHINGS_TOKEN to persist across deploys.',
-        'userid': body.get('userid'),
-        'token_for_env_var': json.dumps(token_data),
-    })
+    token_json = json.dumps(token_data)
+    html = f'''<!DOCTYPE html><html><head><title>Withings Connected</title></head>
+    <body style="background:#0a0a0f;color:#e8e8f0;font-family:monospace;padding:40px;max-width:800px;margin:0 auto">
+    <h2 style="color:#2ecc71">Withings Connected Successfully</h2>
+    <p>Copy the token below and paste it as the <code>WITHINGS_TOKEN</code> env var in your Render dashboard.</p>
+    <textarea id="tok" style="width:100%;height:120px;background:#111;color:#4A7FD4;border:1px solid #333;padding:12px;font-size:12px" readonly>{token_json}</textarea>
+    <br><br>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('tok').value).then(()=>this.textContent='COPIED!')" style="background:#E85D26;color:white;border:none;padding:12px 32px;font-size:14px;cursor:pointer;font-family:monospace">COPY TOKEN</button>
+    <p style="color:#6b6b8a;margin-top:20px;font-size:11px">After pasting in Render, the token will persist across deploys. No need to re-authorize.</p>
+    </body></html>'''
+    resp = make_response(html)
+    resp.headers['Content-Type'] = 'text/html'
+    return resp
 
 
 @app.route('/withings/weight')
