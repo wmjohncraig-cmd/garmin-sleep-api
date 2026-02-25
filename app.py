@@ -207,6 +207,13 @@ def garmin_sleep():
         sleep_score = sleep_data.get('sleepScores', {}).get('overall', {}).get('value', None)
         sleep_seconds = sleep_data.get('sleepTimeSeconds', 0)
         sleep_hours = round(sleep_seconds / 3600, 1) if sleep_seconds else None
+        deep_secs  = sleep_data.get('deepSleepSeconds',  0) or 0
+        light_secs = sleep_data.get('lightSleepSeconds', 0) or 0
+        rem_secs   = sleep_data.get('remSleepSeconds',   0) or 0
+        deep_sleep_hours  = round(deep_secs  / 3600, 1) if deep_secs  else None
+        light_sleep_hours = round(light_secs / 3600, 1) if light_secs else None
+        rem_sleep_hours   = round(rem_secs   / 3600, 1) if rem_secs   else None
+        deep_plus_rem     = round((deep_secs + rem_secs) / 3600, 1) if (deep_secs or rem_secs) else None
         bb_data = sleep.get('sleepBodyBattery', [])
         body_battery = max([r.get('value', 0) for r in bb_data if r.get('value')]) if bb_data else None
         hrv_value = sleep.get('avgOvernightHrv', None)
@@ -216,7 +223,18 @@ def garmin_sleep():
             readiness = tr[0].get('score') if isinstance(tr, list) and tr else None
         except:
             pass
-        return jsonify({'date': today, 'sleep_score': sleep_score, 'sleep_hours': sleep_hours, 'hrv': hrv_value, 'body_battery': body_battery, 'readiness': readiness})
+        return jsonify({
+            'date': today,
+            'sleep_score': sleep_score,
+            'sleep_hours': sleep_hours,
+            'deep_sleep_hours': deep_sleep_hours,
+            'light_sleep_hours': light_sleep_hours,
+            'rem_sleep_hours': rem_sleep_hours,
+            'deep_plus_rem_hours': deep_plus_rem,
+            'hrv': hrv_value,
+            'body_battery': body_battery,
+            'readiness': readiness,
+        })
     except Exception as e:
         global _client
         _client = None
