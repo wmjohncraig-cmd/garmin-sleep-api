@@ -52,17 +52,44 @@ def _vsync_base_body(token, account_id, method):
         'method': method,
     }
 
-def _calc_bmi_and_bf(weight_kg, height_cm, age, gender_str):
-    bmi = None
-    body_fat = None
-    if weight_kg and height_cm:
-        h_m = height_cm / 100
-        bmi = round(weight_kg / (h_m * h_m), 1)
-    if bmi and age:
-        # Deurenberg (1991) BIA formula; gender '2' = male in VeSync
-        is_male = 1 if str(gender_str) == '2' else 0
-        body_fat = round(1.20 * bmi + 0.23 * int(age) - 10.8 * is_male - 5.4, 1)
-    return bmi, body_fat
+def _calc_body_composition(weight_kg, height_cm, impedance, age, gender_str):
+    """Estimate body composition from BIA data (impedance-based).
+    Uses adapted Tanita/Omron leg-to-leg formula for fat-free mass.
+    Returns dict of all body composition metrics."""
+    is_male = 1 if str(gender_str) == '2' else 0
+    out = {
+        'bmi': None, 'body_fat_pct': None, 'fat_free_weight_lbs': None,
+        'muscle_mass_lbs': None, 'bmr_kcal': None,
+        'visceral_fat': None, 'metabolic_age': None,
+    }
+    if not weight_kg or not height_cm:
+        return out
+    height_m = height_cm / 100
+    out['bmi'] = round(weight_kg / (height_m ** 2), 1)
+    if age:
+        out['bmr_kcal'] = round(
+            10 * weight_kg + 6.25 * height_cm - 5 * int(age) + (5 if is_male else -161)
+        )
+    if not impedance or not age:
+        return out
+    # Fat-Free Mass — adapted Tanita/Omron BIA (leg-to-leg, H²/Z index)
+    bia_idx = (height_cm ** 2) / impedance
+    if is_male:
+        ffm_kg = 0.6062 * bia_idx + 0.00536 * height_cm - 0.04804 * int(age) + 12.96
+    else:
+        ffm_kg = 0.4848 * bia_idx + 0.00513 * height_cm - 0.01733 * int(age) + 12.44
+    fat_kg = max(0.0, weight_kg - ffm_kg)
+    bfp = round(fat_kg / weight_kg * 100, 1)
+    out['body_fat_pct']        = bfp
+    out['fat_free_weight_lbs'] = round(ffm_kg * 2.20462, 1)
+    out['muscle_mass_lbs']     = round(ffm_kg * 0.75 * 2.20462, 1)
+    # Visceral fat level 1–30 (empirical estimate)
+    out['visceral_fat'] = max(1, min(30, round(bfp * 0.3 + out['bmi'] * 0.3 - 5)))
+    # Metabolic age: actual age adjusted for body composition vs. healthy reference
+    ideal_bfp = 15 if is_male else 25
+    met_age = int(age) + round((bfp - ideal_bfp) * 0.5 + max(0, out['bmi'] - 22) * 0.4)
+    out['metabolic_age'] = max(18, min(80, met_age))
+    return out
 
 def _vesync_login():
     """Authenticate with VeSync API, return (token, account_id)."""
@@ -142,15 +169,13 @@ def get_vesync_weight():
         r = records[0]
         weight_lb = r.get('weigh_lb')
         weight_kg = r.get('weigh_kg') or (weight_lb / 2.20462 if weight_lb else None)
-        bmi, body_fat = _calc_bmi_and_bf(weight_kg, r.get('heightCm'), r.get('age'), r.get('gender', '1'))
+        comp = _calc_body_composition(weight_kg, r.get('heightCm'), r.get('impedance'), r.get('age'), r.get('gender', '1'))
         ts_val = r.get('timestamp')
         date_str = date.fromtimestamp(ts_val).isoformat() if ts_val else date.today().isoformat()
         return {
             'weight_lbs': round(float(weight_lb), 1) if weight_lb else (round(weight_kg * 2.20462, 1) if weight_kg else None),
-            'body_fat_pct': body_fat,
-            'bmi': bmi,
-            'date': date_str,
-            'unit': 'lbs',
+            'date': date_str, 'unit': 'lbs',
+            **comp,
         }
 
     # Fallback: V2 endpoint (BT-only scales, returns weightG in grams)
@@ -173,15 +198,13 @@ def get_vesync_weight():
         weight_g = r.get('weightG')
         weight_kg = weight_g / 1000 if weight_g else None
         weight_lbs = round(weight_g / 453.592, 1) if weight_g else None
-        bmi, body_fat = _calc_bmi_and_bf(weight_kg, r.get('heightCm'), r.get('age'), r.get('gender', '1'))
+        comp = _calc_body_composition(weight_kg, r.get('heightCm'), r.get('impedance'), r.get('age'), r.get('gender', '1'))
         ts_val = r.get('timestamp')
         date_str = date.fromtimestamp(ts_val).isoformat() if ts_val else date.today().isoformat()
         return {
             'weight_lbs': weight_lbs,
-            'body_fat_pct': body_fat,
-            'bmi': bmi,
-            'date': date_str,
-            'unit': 'lbs',
+            'date': date_str, 'unit': 'lbs',
+            **comp,
         }
 
     raise Exception(f'No weight records in V1 or V2 response. V1={v1}, V2={v2}')
