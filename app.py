@@ -224,23 +224,31 @@ def garmin_sleep():
 
 @app.route('/weight')
 def weight():
+    vesync_data = None
+    vesync_err  = None
+
     # 1. Try VeSync API
     try:
-        data = get_vesync_weight()
-        return jsonify(data)
-    except Exception as vesync_err:
-        pass
+        vesync_data = get_vesync_weight()
+    except Exception as e:
+        vesync_err = e
 
-    # 2. Fall back to most recent manual log entry
+    # 2. Check manual log — use if more recent than VeSync result
     try:
         entries = _load_weight_log()
         if entries:
             latest = sorted(entries, key=lambda e: e.get('date', ''))[-1]
-            return jsonify({**latest, 'unit': 'lbs', 'source': 'manual_log'})
+            vesync_date = vesync_data.get('date', '') if vesync_data else ''
+            if latest.get('date', '') >= vesync_date:
+                return jsonify({**latest, 'unit': 'lbs'})
     except Exception:
         pass
 
-    # 3. Fall back to MANUAL_WEIGHT_LBS env var
+    # 3. Return VeSync data if we got it
+    if vesync_data:
+        return jsonify(vesync_data)
+
+    # 4. Fall back to MANUAL_WEIGHT_LBS env var
     if MANUAL_WEIGHT_LBS:
         try:
             return jsonify({
