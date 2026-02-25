@@ -18,7 +18,7 @@ VESYNC_BASE = 'https://smartapi.vesync.com'
 MANUAL_WEIGHT_LBS = os.environ.get('MANUAL_WEIGHT_LBS')
 WEIGHT_LOG = os.path.join(os.path.dirname(__file__), 'weight_log.json')
 
-ATHLETE_HEIGHT_INCHES = float(os.environ.get('ATHLETE_HEIGHT_INCHES', '77'))  # 6'5"
+ATHLETE_HEIGHT_INCHES = 77  # John Craig, 6'5"
 
 WITHINGS_CLIENT_ID = os.environ.get('WITHINGS_CLIENT_ID')
 WITHINGS_CLIENT_SECRET = os.environ.get('WITHINGS_CLIENT_SECRET')
@@ -348,7 +348,7 @@ def get_withings_weight():
         'fat_free_weight_lbs': round(metrics['fat_free_mass_kg'] * 2.20462, 1) if 'fat_free_mass_kg' in metrics else None,
         'body_water_pct': round(metrics['body_water_pct'], 1) if 'body_water_pct' in metrics else None,
         'visceral_fat': round(metrics['visceral_fat']) if 'visceral_fat' in metrics else None,
-        'bmi': round(weight_kg / ((ATHLETE_HEIGHT_INCHES * 0.0254) ** 2), 1) if weight_kg else None,
+        'bmi': round((weight_lbs / (77 ** 2)) * 703, 1) if weight_lbs else None,
     }
     return result
 
