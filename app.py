@@ -141,7 +141,7 @@ def get_vesync_weight():
 
     # Fallback: V2 endpoint (BT-only scales, returns weightG in grams)
     v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
-    v2_body.update({'configModule': config_module, 'pageSize': 100, 'page': 1, 'allData': True, 'order': 'desc'})
+    v2_body.update({'configModule': config_module, 'pageSize': 1, 'page': 1, 'order': 'desc'})
     v2 = req_lib.post(
         f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
         headers=hdrs, json=v2_body, timeout=10
@@ -149,7 +149,7 @@ def get_vesync_weight():
 
     records = v2.get('result', {}).get('weightDatas', [])
     if records:
-        r = max(records, key=lambda x: x.get('timestamp', 0))
+        r = records[0]
         weight_g = r.get('weightG')
         weight_kg = weight_g / 1000 if weight_g else None
         weight_lbs = round(weight_g / 453.592, 1) if weight_g else None
@@ -273,7 +273,7 @@ def weight_debug():
             ).json()
 
             v2_body = _vsync_base_body(token, account_id, 'getWeighingDataV2')
-            v2_body.update({'configModule': config_module, 'pageSize': 100, 'page': 1, 'allData': True, 'order': 'desc'})
+            v2_body.update({'configModule': config_module, 'pageSize': 1, 'page': 1, 'order': 'desc'})
             info['v2_raw'] = req_lib.post(
                 f'{VESYNC_BASE}/cloud/v2/deviceManaged/getWeighingDataV2',
                 headers=hdrs, json=v2_body, timeout=10
