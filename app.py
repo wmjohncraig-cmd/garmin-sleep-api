@@ -280,11 +280,10 @@ _WITHINGS_TYPES = {
 def get_withings_weight():
     """Fetch latest Withings measurement with full body composition."""
     access_token = _get_withings_access_token()
+    # Don't filter by meastype — get all available measures
     resp = req_lib.post('https://wbsapi.withings.net/measure', data={
         'action': 'getmeas',
-        'meastype': ','.join(str(t) for t in _WITHINGS_TYPES.keys()),
         'category': 1,  # real measurements only
-        'lastupdate': 0,
     }, headers={
         'Authorization': f'Bearer {access_token}',
     }, timeout=10).json()
@@ -296,18 +295,19 @@ def get_withings_weight():
     if not groups:
         raise Exception('No Withings measurements found')
 
-    # Most recent group first (API returns descending by date)
-    grp = groups[0]
-    ts = grp.get('date', 0)
-    date_str = date.fromtimestamp(ts).isoformat() if ts else date.today().isoformat()
-
-    # Parse measures: value * 10^unit
+    # Collect metrics across recent groups (different metrics may be in different groups)
     metrics = {}
-    for m in grp.get('measures', []):
-        mtype = m.get('type')
-        if mtype in _WITHINGS_TYPES:
-            val = m['value'] * (10 ** m['unit'])
-            metrics[_WITHINGS_TYPES[mtype]] = val
+    latest_ts = 0
+    for grp in groups[:10]:  # check up to 10 most recent groups
+        for m in grp.get('measures', []):
+            mtype = m.get('type')
+            if mtype in _WITHINGS_TYPES and _WITHINGS_TYPES[mtype] not in metrics:
+                val = m['value'] * (10 ** m['unit'])
+                metrics[_WITHINGS_TYPES[mtype]] = val
+        if grp.get('date', 0) > latest_ts:
+            latest_ts = grp['date']
+
+    date_str = date.fromtimestamp(latest_ts).isoformat() if latest_ts else date.today().isoformat()
 
     weight_kg = metrics.get('weight_kg')
     weight_lbs = round(weight_kg * 2.20462, 1) if weight_kg else None
@@ -326,6 +326,24 @@ def get_withings_weight():
         'bmi': round(weight_kg / (1.78 ** 2), 1) if weight_kg else None,  # 5'10" = 1.78m
     }
     return result
+
+
+@app.route('/withings/debug')
+def withings_debug():
+    """Show raw Withings API response for debugging."""
+    try:
+        access_token = _get_withings_access_token()
+        resp = req_lib.post('https://wbsapi.withings.net/measure', data={
+            'action': 'getmeas',
+            'category': 1,
+        }, headers={
+            'Authorization': f'Bearer {access_token}',
+        }, timeout=10).json()
+        # Trim to first 5 groups for readability
+        groups = resp.get('body', {}).get('measuregrps', [])[:5]
+        return jsonify({'status': resp.get('status'), 'num_groups': len(resp.get('body', {}).get('measuregrps', [])), 'first_5_groups': groups})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/withings/auth')
