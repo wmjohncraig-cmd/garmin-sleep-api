@@ -18,6 +18,8 @@ VESYNC_BASE = 'https://smartapi.vesync.com'
 MANUAL_WEIGHT_LBS = os.environ.get('MANUAL_WEIGHT_LBS')
 WEIGHT_LOG = os.path.join(os.path.dirname(__file__), 'weight_log.json')
 NUTRITION_LOG = os.path.join(os.path.dirname(__file__), 'nutrition_log.json')
+JSONBIN_API_KEY = os.environ.get('JSONBIN_API_KEY')
+JSONBIN_BIN_ID = os.environ.get('JSONBIN_BIN_ID')
 
 ATHLETE_HEIGHT_INCHES = 77  # John Craig, 6'5"
 
@@ -439,22 +441,19 @@ _nutrition_cache = None
 
 def _load_nutrition_log():
     global _nutrition_cache
-    # 1. In-memory cache (survives across requests within same process)
     if _nutrition_cache is not None:
         return _nutrition_cache
-    # 2. File on disk
-    try:
-        with open(NUTRITION_LOG) as f:
-            _nutrition_cache = json.load(f)
-            return _nutrition_cache
-    except Exception:
-        pass
-    # 3. Env var NUTRITION_LOG_DATA (survives Render deploys/restarts)
-    env_data = os.environ.get('NUTRITION_LOG_DATA')
-    if env_data:
+    # Load from JSONBin (persistent across Render restarts)
+    if JSONBIN_API_KEY and JSONBIN_BIN_ID:
         try:
-            _nutrition_cache = json.loads(env_data)
-            return _nutrition_cache
+            r = req_lib.get(
+                f'https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest',
+                headers={'X-Master-Key': JSONBIN_API_KEY},
+                timeout=10,
+            )
+            if r.ok:
+                _nutrition_cache = r.json().get('record', {})
+                return _nutrition_cache
         except Exception:
             pass
     _nutrition_cache = {}
@@ -463,28 +462,17 @@ def _load_nutrition_log():
 def _save_nutrition_log(data):
     global _nutrition_cache
     _nutrition_cache = data
-    try:
-        with open(NUTRITION_LOG, 'w') as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass
-    # Auto-persist to Render env var if API key is available
-    _persist_nutrition_to_render(data)
-
-def _persist_nutrition_to_render(data):
-    api_key = os.environ.get('RENDER_API_KEY')
-    service_id = os.environ.get('RENDER_SERVICE_ID')
-    if not api_key or not service_id:
-        return
-    try:
-        req_lib.put(
-            f'https://api.render.com/v1/services/{service_id}/env-vars/NUTRITION_LOG_DATA',
-            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-            json={'value': json.dumps(data)},
-            timeout=5,
-        )
-    except Exception:
-        pass
+    # Persist to JSONBin
+    if JSONBIN_API_KEY and JSONBIN_BIN_ID:
+        try:
+            req_lib.put(
+                f'https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}',
+                headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
+                json=data,
+                timeout=10,
+            )
+        except Exception:
+            pass
 
 def _nutrition_totals(entries):
     return {
