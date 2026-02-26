@@ -435,16 +435,56 @@ def withings_weight():
         return jsonify({'error': str(e)}), 500
 
 
+_nutrition_cache = None
+
 def _load_nutrition_log():
+    global _nutrition_cache
+    # 1. In-memory cache (survives across requests within same process)
+    if _nutrition_cache is not None:
+        return _nutrition_cache
+    # 2. File on disk
     try:
         with open(NUTRITION_LOG) as f:
-            return json.load(f)
+            _nutrition_cache = json.load(f)
+            return _nutrition_cache
     except Exception:
-        return {}
+        pass
+    # 3. Env var NUTRITION_LOG_DATA (survives Render deploys/restarts)
+    env_data = os.environ.get('NUTRITION_LOG_DATA')
+    if env_data:
+        try:
+            _nutrition_cache = json.loads(env_data)
+            return _nutrition_cache
+        except Exception:
+            pass
+    _nutrition_cache = {}
+    return _nutrition_cache
 
 def _save_nutrition_log(data):
-    with open(NUTRITION_LOG, 'w') as f:
-        json.dump(data, f, indent=2)
+    global _nutrition_cache
+    _nutrition_cache = data
+    try:
+        with open(NUTRITION_LOG, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+    # Auto-persist to Render env var if API key is available
+    _persist_nutrition_to_render(data)
+
+def _persist_nutrition_to_render(data):
+    api_key = os.environ.get('RENDER_API_KEY')
+    service_id = os.environ.get('RENDER_SERVICE_ID')
+    if not api_key or not service_id:
+        return
+    try:
+        req_lib.put(
+            f'https://api.render.com/v1/services/{service_id}/env-vars/NUTRITION_LOG_DATA',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'value': json.dumps(data)},
+            timeout=5,
+        )
+    except Exception:
+        pass
 
 def _nutrition_totals(entries):
     return {
