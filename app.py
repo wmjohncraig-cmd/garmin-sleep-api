@@ -17,6 +17,7 @@ VESYNC_BASE = 'https://smartapi.vesync.com'
 
 MANUAL_WEIGHT_LBS = os.environ.get('MANUAL_WEIGHT_LBS')
 WEIGHT_LOG = os.path.join(os.path.dirname(__file__), 'weight_log.json')
+NUTRITION_LOG = os.path.join(os.path.dirname(__file__), 'nutrition_log.json')
 
 ATHLETE_HEIGHT_INCHES = 77  # John Craig, 6'5"
 
@@ -430,6 +431,89 @@ def withings_callback():
 def withings_weight():
     try:
         return jsonify(get_withings_weight())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _load_nutrition_log():
+    try:
+        with open(NUTRITION_LOG) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_nutrition_log(data):
+    with open(NUTRITION_LOG, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def _nutrition_totals(entries):
+    return {
+        'calories': sum(e.get('calories', 0) for e in entries),
+        'protein': sum(e.get('protein', 0) for e in entries),
+        'carbs': sum(e.get('carbs', 0) for e in entries),
+        'fat': sum(e.get('fat', 0) for e in entries),
+    }
+
+
+@app.route('/nutrition/log', methods=['POST'])
+def nutrition_log():
+    body = request.get_json(force=True) or {}
+    date_str = body.get('date')
+    entries = body.get('entries', [])
+    if not date_str or not entries:
+        return jsonify({'error': 'date and entries[] required'}), 400
+    log = _load_nutrition_log()
+    if date_str not in log:
+        log[date_str] = []
+    log[date_str].extend(entries)
+    _save_nutrition_log(log)
+    return jsonify({
+        'date': date_str,
+        'entries': log[date_str],
+        'totals': _nutrition_totals(log[date_str]),
+    })
+
+
+@app.route('/nutrition/today')
+def nutrition_today():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ct = datetime.now(ZoneInfo('America/Chicago'))
+    today_key = ct.strftime('%Y-%m-%d')
+    log = _load_nutrition_log()
+    entries = log.get(today_key, [])
+    return jsonify({
+        'date': today_key,
+        'entries': entries,
+        'totals': _nutrition_totals(entries),
+    })
+
+
+@app.route('/withings/weight-history')
+def withings_weight_history():
+    try:
+        access_token = _get_withings_access_token()
+        start_ts = int(time.time()) - 14 * 86400
+        resp = req_lib.post('https://wbsapi.withings.net/measure', data={
+            'action': 'getmeas',
+            'category': 1,
+            'meastype': 1,  # weight only
+            'startdate': start_ts,
+        }, headers={
+            'Authorization': f'Bearer {access_token}',
+        }, timeout=10).json()
+        if resp.get('status') != 0:
+            raise Exception(f"Withings API error: {resp}")
+        groups = resp.get('body', {}).get('measuregrps', [])
+        by_date = {}
+        for grp in groups:
+            for m in grp.get('measures', []):
+                if m.get('type') == 1:
+                    weight_kg = m['value'] * (10 ** m['unit'])
+                    d = date.fromtimestamp(grp['date']).isoformat()
+                    by_date[d] = round(weight_kg * 2.20462, 1)
+        result = [{'date': d, 'weight_lbs': w} for d, w in sorted(by_date.items())]
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
