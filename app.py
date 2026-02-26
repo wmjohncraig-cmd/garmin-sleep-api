@@ -493,7 +493,10 @@ def nutrition_log():
     log = _load_nutrition_log()
     if date_str not in log:
         log[date_str] = []
-    log[date_str].extend(entries)
+    if body.get('replace'):
+        log[date_str] = entries
+    else:
+        log[date_str].extend(entries)
     _save_nutrition_log(log)
     return jsonify({
         'date': date_str,
