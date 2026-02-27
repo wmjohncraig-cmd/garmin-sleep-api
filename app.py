@@ -854,6 +854,11 @@ def coaching_audit():
         resp.raise_for_status()
         data = resp.json()
         text = data['content'][0]['text']
+        # Strip markdown code fences and trailing text that Haiku sometimes adds
+        import re
+        m = re.search(r'\{[\s\S]*\}', text)
+        if m:
+            text = m.group(0)
         audit = json.loads(text)
         return jsonify(audit)
     except json.JSONDecodeError:
