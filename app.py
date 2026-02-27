@@ -844,7 +844,7 @@ def coaching_audit():
                 'content-type': 'application/json',
             },
             json={
-                'model': 'claude-sonnet-4-20250514',
+                'model': 'claude-haiku-4-5-20251001',
                 'max_tokens': 2048,
                 'system': AUDIT_SYSTEM_PROMPT,
                 'messages': [{'role': 'user', 'content': brief}],
@@ -860,6 +860,11 @@ def coaching_audit():
         return jsonify({'error': 'Failed to parse audit response', 'raw': text}), 502
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/ping')
+def ping():
+    return jsonify({'ok': True})
 
 
 if __name__ == '__main__':
