@@ -233,19 +233,29 @@ def get_client():
 
 # ── WITHINGS ──────────────────────────────────────────────────
 
+JSONBIN_WITHINGS_BIN_ID = os.environ.get('JSONBIN_WITHINGS_BIN_ID')
+
 def _load_withings_token():
     global _withings_token_cache
-    # 1. In-memory cache (fastest, survives across requests)
+    # 1. In-memory cache
     if _withings_token_cache:
         return _withings_token_cache
-    # 2. File on disk (survives process restart if disk persists)
-    try:
-        with open(WITHINGS_TOKEN_FILE) as f:
-            _withings_token_cache = json.load(f)
-            return _withings_token_cache
-    except Exception:
-        pass
-    # 3. Env var WITHINGS_TOKEN (JSON string — survives deploys)
+    # 2. JSONBin (persistent across restarts)
+    if JSONBIN_API_KEY and JSONBIN_WITHINGS_BIN_ID:
+        try:
+            r = req_lib.get(
+                f'https://api.jsonbin.io/v3/b/{JSONBIN_WITHINGS_BIN_ID}/latest',
+                headers={'X-Master-Key': JSONBIN_API_KEY},
+                timeout=10,
+            )
+            if r.ok:
+                data = r.json().get('record', {})
+                if data.get('access_token'):
+                    _withings_token_cache = data
+                    return _withings_token_cache
+        except Exception:
+            pass
+    # 3. Env var fallback
     env_token = os.environ.get('WITHINGS_TOKEN')
     if env_token:
         try:
@@ -258,11 +268,17 @@ def _load_withings_token():
 def _save_withings_token(data):
     global _withings_token_cache
     _withings_token_cache = data
-    try:
-        with open(WITHINGS_TOKEN_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass
+    # Persist to JSONBin
+    if JSONBIN_API_KEY and JSONBIN_WITHINGS_BIN_ID:
+        try:
+            req_lib.put(
+                f'https://api.jsonbin.io/v3/b/{JSONBIN_WITHINGS_BIN_ID}',
+                headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
+                json=data,
+                timeout=10,
+            )
+        except Exception:
+            pass
 
 def _refresh_withings_token(token_data):
     """Refresh an expired Withings access token."""
