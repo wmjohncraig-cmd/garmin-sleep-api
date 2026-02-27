@@ -807,6 +807,14 @@ Return ONLY a JSON object (no markdown, no code fences):
   "tomorrow_modification": "any changes to prescribed workout or NONE"
 }"""
 
+# Load coaching principles once at startup
+_COACHING_PRINCIPLES = ''
+try:
+    with open(os.path.join(os.path.dirname(__file__), 'COACHING_PRINCIPLES.md')) as _f:
+        _COACHING_PRINCIPLES = _f.read()
+except Exception:
+    pass
+
 @app.route('/coaching-audit', methods=['POST'])
 def coaching_audit():
     if not ANTHROPIC_API_KEY:
@@ -815,6 +823,9 @@ def coaching_audit():
     brief = body.get('brief', '')
     if not brief:
         return jsonify({'error': 'brief text required'}), 400
+    # Append coaching principles so the auditor always sees them
+    if _COACHING_PRINCIPLES:
+        brief += '\n\n===COACHING PRINCIPLES — READ BEFORE RESPONDING===\n\n' + _COACHING_PRINCIPLES
     try:
         resp = req_lib.post(
             'https://api.anthropic.com/v1/messages',
@@ -829,7 +840,7 @@ def coaching_audit():
                 'system': AUDIT_SYSTEM_PROMPT,
                 'messages': [{'role': 'user', 'content': brief}],
             },
-            timeout=30,
+            timeout=45,
         )
         resp.raise_for_status()
         data = resp.json()
