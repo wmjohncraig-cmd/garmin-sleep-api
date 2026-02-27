@@ -20,6 +20,7 @@ WEIGHT_LOG = os.path.join(os.path.dirname(__file__), 'weight_log.json')
 NUTRITION_LOG = os.path.join(os.path.dirname(__file__), 'nutrition_log.json')
 JSONBIN_API_KEY = os.environ.get('JSONBIN_API_KEY')
 JSONBIN_BIN_ID = os.environ.get('JSONBIN_BIN_ID')
+JSONBIN_STRENGTH_BIN_ID = os.environ.get('JSONBIN_STRENGTH_BIN_ID')
 
 ATHLETE_HEIGHT_INCHES = 77  # John Craig, 6'5"
 
@@ -534,6 +535,70 @@ def nutrition_today():
         'entries': entries,
         'totals': _nutrition_totals(entries),
     })
+
+
+_strength_cache = None
+
+def _load_strength_log():
+    global _strength_cache
+    if _strength_cache is not None:
+        return _strength_cache
+    if JSONBIN_API_KEY and JSONBIN_STRENGTH_BIN_ID:
+        try:
+            r = req_lib.get(
+                f'https://api.jsonbin.io/v3/b/{JSONBIN_STRENGTH_BIN_ID}/latest',
+                headers={'X-Master-Key': JSONBIN_API_KEY},
+                timeout=10,
+            )
+            if r.ok:
+                _strength_cache = r.json().get('record', {})
+                return _strength_cache
+        except Exception:
+            pass
+    _strength_cache = {'sessions': []}
+    return _strength_cache
+
+def _save_strength_log(data):
+    global _strength_cache
+    _strength_cache = data
+    if JSONBIN_API_KEY and JSONBIN_STRENGTH_BIN_ID:
+        try:
+            req_lib.put(
+                f'https://api.jsonbin.io/v3/b/{JSONBIN_STRENGTH_BIN_ID}',
+                headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
+                json=data,
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+
+@app.route('/strength/log', methods=['POST'])
+def strength_log():
+    body = request.get_json(force=True) or {}
+    date_str = body.get('date')
+    template_name = body.get('template_name')
+    exercises = body.get('exercises', [])
+    if not date_str or not template_name or not exercises:
+        return jsonify({'error': 'date, template_name, and exercises[] required'}), 400
+    session = {
+        'date': date_str,
+        'template_name': template_name,
+        'exercises': exercises,
+        'logged_at': int(time.time()),
+    }
+    log = _load_strength_log()
+    if 'sessions' not in log:
+        log['sessions'] = []
+    log['sessions'].append(session)
+    _save_strength_log(log)
+    return jsonify(session)
+
+
+@app.route('/strength/history')
+def strength_history():
+    log = _load_strength_log()
+    return jsonify(log)
 
 
 @app.route('/withings/weight-history')
