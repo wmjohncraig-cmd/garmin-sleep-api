@@ -522,6 +522,20 @@ def nutrition_log():
     })
 
 
+@app.route('/nutrition/clear', methods=['POST'])
+def nutrition_clear():
+    body = request.get_json(force=True) or {}
+    date_str = body.get('date')
+    if not date_str:
+        return jsonify({'error': 'date required'}), 400
+    log = _load_nutrition_log()
+    removed = date_str in log
+    if removed:
+        del log[date_str]
+        _save_nutrition_log(log)
+    return jsonify({'date': date_str, 'cleared': removed})
+
+
 @app.route('/nutrition/today')
 def nutrition_today():
     from datetime import datetime
