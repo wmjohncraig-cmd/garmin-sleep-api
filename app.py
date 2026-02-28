@@ -932,6 +932,133 @@ def coaching_audit():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/garmin-activities')
+def garmin_activities():
+    """Return last 24-48hrs of Garmin activities with full lap + run dynamics detail."""
+    try:
+        client = get_client()
+        # Fetch recent activities (last 20, will filter by date)
+        activities = client.connectapi(
+            '/activitylist-service/activities/search/activities',
+            params={'start': 0, 'limit': 20}
+        )
+        if not isinstance(activities, list):
+            activities = []
+
+        # Filter to last 48 hours
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        ct = ZoneInfo('America/Chicago')
+        cutoff = datetime.now(ct) - timedelta(hours=48)
+
+        recent = []
+        for act in activities:
+            start_str = act.get('startTimeLocal', '')
+            if not start_str:
+                continue
+            try:
+                start_dt = datetime.strptime(start_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=ct)
+            except Exception:
+                continue
+            if start_dt >= cutoff:
+                recent.append(act)
+
+        # Enrich each activity with details
+        results = []
+        for act in recent:
+            aid = act.get('activityId')
+            if not aid:
+                continue
+
+            enriched = {
+                'activityId': aid,
+                'activityName': act.get('activityName', ''),
+                'activityType': act.get('activityType', {}).get('typeKey', ''),
+                'startTimeLocal': act.get('startTimeLocal', ''),
+                'distance': act.get('distance'),
+                'duration': act.get('duration'),
+                'movingDuration': act.get('movingDuration'),
+                'elevationGain': act.get('elevationGain'),
+                'calories': act.get('calories'),
+                'averageHR': act.get('averageHR'),
+                'maxHR': act.get('maxHR'),
+                'averageSpeed': act.get('averageSpeed'),
+                'maxSpeed': act.get('maxSpeed'),
+                'trainingEffect': act.get('aerobicTrainingEffect'),
+                'anaerobicTrainingEffect': act.get('anaerobicTrainingEffect'),
+                'vO2MaxValue': act.get('vO2MaxValue'),
+            }
+
+            # Run dynamics (already in activity list response)
+            type_key = enriched['activityType']
+            if type_key in ('running', 'trail_running', 'treadmill_running'):
+                enriched['runDynamics'] = {
+                    'avgCadence': act.get('averageRunningCadenceInStepsPerMinute'),
+                    'maxCadence': act.get('maxRunningCadenceInStepsPerMinute'),
+                    'avgStrideLength': act.get('avgStrideLength'),
+                    'avgGroundContactTime': act.get('avgGroundContactTime'),
+                    'avgGroundContactBalance': act.get('avgGroundContactBalance'),
+                    'avgVerticalOscillation': act.get('avgVerticalOscillation'),
+                    'avgVerticalRatio': act.get('avgVerticalRatio'),
+                }
+
+            # Fetch laps/splits
+            try:
+                splits = client.connectapi(f'/activity-service/activity/{aid}/splits')
+                laps_raw = splits.get('lapDTOs', []) if isinstance(splits, dict) else []
+                laps = []
+                for lap in laps_raw:
+                    lap_data = {
+                        'lapIndex': lap.get('lapIndex'),
+                        'distance': lap.get('distance'),
+                        'duration': lap.get('duration'),
+                        'movingDuration': lap.get('movingDuration'),
+                        'averageSpeed': lap.get('averageSpeed'),
+                        'maxSpeed': lap.get('maxSpeed'),
+                        'averageHR': lap.get('averageHR'),
+                        'maxHR': lap.get('maxHR'),
+                        'calories': lap.get('calories'),
+                        'elevationGain': lap.get('elevationGain'),
+                        'elevationLoss': lap.get('elevationLoss'),
+                    }
+                    # Run-specific lap fields
+                    if type_key in ('running', 'trail_running', 'treadmill_running'):
+                        lap_data['averageRunCadence'] = lap.get('averageRunCadence')
+                        lap_data['strideLength'] = lap.get('strideLength')
+                    laps.append(lap_data)
+                enriched['laps'] = laps
+            except Exception as e:
+                enriched['laps'] = []
+                enriched['lapsError'] = str(e)
+
+            # Fetch HR time-in-zones
+            try:
+                hr_zones = client.connectapi(f'/activity-service/activity/{aid}/hrTimeInZones')
+                if isinstance(hr_zones, list) and hr_zones:
+                    zones = []
+                    for z in hr_zones:
+                        zones.append({
+                            'zoneNumber': z.get('zoneNumber'),
+                            'zoneLowBoundary': z.get('zoneLowBoundary'),
+                            'secsInZone': z.get('secsInZone'),
+                            'pctInZone': round(z.get('secsInZone', 0) / max(1, enriched.get('duration', 1)) * 100, 1) if enriched.get('duration') else None,
+                        })
+                    enriched['hrZones'] = zones
+            except Exception:
+                enriched['hrZones'] = []
+
+            results.append(enriched)
+
+        return jsonify({
+            'count': len(results),
+            'activities': results,
+        })
+    except Exception as e:
+        global _client
+        _client = None
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/ping')
 def ping():
     return jsonify({'ok': True})
