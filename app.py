@@ -1135,5 +1135,220 @@ def ping():
     return jsonify({'ok': True})
 
 
+# ── MCP SSE Transport ──────────────────────────────────────────
+import uuid
+import threading
+import queue as queue_mod
+
+_mcp_sessions = {}  # session_id -> queue.Queue
+_mcp_sessions_lock = threading.Lock()
+
+MCP_TOOL_DEF = {
+    "name": "log_nutrition",
+    "description": (
+        "Log daily nutrition for John Craig's Ironman training dashboard.\n\n"
+        "Accepts meals with macros, exercise burn estimates, and BMR.\n"
+        "Merges with existing data for the same date — so you can log\n"
+        "breakfast, then lunch, then dinner across multiple calls.\n"
+        "Protein target is 175g/day. BMR is 2030 cal.\n\n"
+        "Args:\n"
+        "  date: Date in YYYY-MM-DD format (Central Time)\n"
+        "  meals: List of meal dicts, each with: item (str), calories (int), "
+        "protein (int), carbs (int), fat (int)\n"
+        "  bmr: Basal metabolic rate, default 2030\n"
+        "  exercise_calories: Estimated exercise calories burned today\n"
+        "  deficit: Calculated caloric deficit\n"
+        "  status: 'partial' or 'complete' — whether this is a partial or complete day log"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
+            "meals": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item": {"type": "string"},
+                        "calories": {"type": "integer"},
+                        "protein": {"type": "integer"},
+                        "carbs": {"type": "integer"},
+                        "fat": {"type": "integer"},
+                    },
+                    "required": ["item", "calories", "protein", "carbs", "fat"],
+                },
+                "description": "List of meal dicts",
+            },
+            "bmr": {"type": "integer", "default": 2030},
+            "exercise_calories": {"type": "integer", "default": 0},
+            "deficit": {"type": "integer", "default": 0},
+            "status": {"type": "string", "default": "partial"},
+        },
+        "required": ["date", "meals"],
+    },
+}
+
+
+def _mcp_handle_tool_call(params):
+    """Execute the log_nutrition tool by calling the local /log-nutrition endpoint."""
+    tool_name = params.get('name', '')
+    arguments = params.get('arguments', {})
+    if tool_name != 'log_nutrition':
+        return {'error': {'code': -32602, 'message': f'Unknown tool: {tool_name}'}}
+
+    import requests as rlib
+    headers = {'Content-Type': 'application/json'}
+    if NUTRITION_API_KEY:
+        headers['X-API-Key'] = NUTRITION_API_KEY
+
+    body = {
+        'date': arguments.get('date', ''),
+        'meals': arguments.get('meals', []),
+        'bmr': arguments.get('bmr', 2030),
+        'exercise_calories': arguments.get('exercise_calories', 0),
+        'deficit': arguments.get('deficit', 0),
+        'status': arguments.get('status', 'partial'),
+    }
+
+    try:
+        # Call ourselves — use the internal route directly
+        with app.test_request_context(json=body):
+            resp_data = _log_nutrition_internal(body)
+        return {
+            'result': {
+                'content': [{'type': 'text', 'text': resp_data}],
+                'isError': False,
+            }
+        }
+    except Exception as e:
+        return {
+            'result': {
+                'content': [{'type': 'text', 'text': f'Error: {str(e)}'}],
+                'isError': True,
+            }
+        }
+
+
+def _log_nutrition_internal(body):
+    """Internal nutrition logging that returns a formatted string."""
+    date_str = body.get('date', '')
+    meals = body.get('meals', [])
+    bmr = body.get('bmr', 2030)
+    exercise_calories = body.get('exercise_calories', 0)
+    deficit = body.get('deficit', 0)
+    status = body.get('status', 'partial')
+
+    if not date_str or not meals:
+        return 'Error: date and meals are required'
+
+    log = _load_nutrition_log()
+    if date_str not in log:
+        log[date_str] = []
+
+    for meal in meals:
+        log[date_str].append({
+            'item': meal.get('item', 'Unknown'),
+            'calories': meal.get('calories', 0),
+            'protein': meal.get('protein', 0),
+            'carbs': meal.get('carbs', 0),
+            'fat': meal.get('fat', 0),
+        })
+
+    # Store metadata
+    log[date_str] = [e for e in log[date_str] if not e.get('_meta')]
+    log[date_str].append({
+        '_meta': True, 'bmr': bmr, 'exercise_calories': exercise_calories,
+        'deficit': deficit, 'status': status,
+    })
+    _save_nutrition_log(log)
+
+    real_entries = [e for e in log[date_str] if not e.get('_meta')]
+    totals = _nutrition_totals(real_entries)
+    protein_remaining = max(0, PROTEIN_TARGET - totals['protein'])
+
+    return (
+        f"Logged {len(meals)} meal(s) for {date_str}\n"
+        f"Calories: {totals['calories']} | Protein: {totals['protein']}g | "
+        f"Carbs: {totals['carbs']}g | Fat: {totals['fat']}g\n"
+        f"Protein: {totals['protein']}g / {PROTEIN_TARGET}g target "
+        f"({protein_remaining}g remaining)"
+    )
+
+
+def _mcp_process_message(msg):
+    """Process a JSON-RPC message and return the response dict (or None for notifications)."""
+    method = msg.get('method', '')
+    msg_id = msg.get('id')
+
+    if method == 'initialize':
+        return {
+            'jsonrpc': '2.0', 'id': msg_id,
+            'result': {
+                'protocolVersion': '2024-11-05',
+                'capabilities': {'tools': {'listChanged': False}},
+                'serverInfo': {'name': 'nutrition-logger', 'version': '1.0.0'},
+            },
+        }
+    if method == 'notifications/initialized':
+        return None
+    if method == 'tools/list':
+        return {
+            'jsonrpc': '2.0', 'id': msg_id,
+            'result': {'tools': [MCP_TOOL_DEF]},
+        }
+    if method == 'tools/call':
+        result = _mcp_handle_tool_call(msg.get('params', {}))
+        return {'jsonrpc': '2.0', 'id': msg_id, **result}
+    if method == 'ping':
+        return {'jsonrpc': '2.0', 'id': msg_id, 'result': {}}
+
+    return {
+        'jsonrpc': '2.0', 'id': msg_id,
+        'error': {'code': -32601, 'message': f'Method not found: {method}'},
+    }
+
+
+@app.route('/sse')
+def mcp_sse():
+    session_id = str(uuid.uuid4())
+    q = queue_mod.Queue()
+    with _mcp_sessions_lock:
+        _mcp_sessions[session_id] = q
+
+    def generate():
+        # First event: tell client where to POST messages
+        yield f"event: endpoint\ndata: /messages?session_id={session_id}\n\n"
+        while True:
+            try:
+                msg = q.get(timeout=25)
+                yield f"event: message\ndata: {json.dumps(msg)}\n\n"
+            except queue_mod.Empty:
+                # Send keepalive
+                yield ": keepalive\n\n"
+
+    resp = make_response(generate())
+    resp.headers['Content-Type'] = 'text/event-stream'
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Connection'] = 'keep-alive'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
+
+
+@app.route('/messages', methods=['POST'])
+def mcp_messages():
+    session_id = request.args.get('session_id', '')
+    with _mcp_sessions_lock:
+        q = _mcp_sessions.get(session_id)
+    if not q:
+        return jsonify({'error': 'Invalid session'}), 400
+
+    body = request.get_json(force=True) or {}
+    response = _mcp_process_message(body)
+    if response is not None:
+        q.put(response)
+
+    return jsonify({'ok': True}), 202
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
