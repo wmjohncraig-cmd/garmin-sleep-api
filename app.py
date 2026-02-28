@@ -529,11 +529,79 @@ def nutrition_today():
     ct = datetime.now(ZoneInfo('America/Chicago'))
     today_key = ct.strftime('%Y-%m-%d')
     log = _load_nutrition_log()
-    entries = log.get(today_key, [])
-    return jsonify({
+    all_entries = log.get(today_key, [])
+    entries = [e for e in all_entries if not e.get('_meta')]
+    meta = next((e for e in all_entries if e.get('_meta')), None)
+    result = {
         'date': today_key,
         'entries': entries,
         'totals': _nutrition_totals(entries),
+    }
+    if meta:
+        result['bmr'] = meta.get('bmr')
+        result['exercise_calories'] = meta.get('exercise_calories')
+        result['deficit'] = meta.get('deficit')
+        result['status'] = meta.get('status')
+    return jsonify(result)
+
+
+@app.route('/log-nutrition', methods=['POST'])
+def log_nutrition():
+    # API key check
+    if NUTRITION_API_KEY:
+        provided = request.headers.get('X-API-Key', '')
+        if provided != NUTRITION_API_KEY:
+            return jsonify({'error': 'Invalid API key'}), 401
+
+    body = request.get_json(force=True) or {}
+    date_str = body.get('date')
+    meals = body.get('meals', [])
+    if not date_str:
+        return jsonify({'error': 'date required'}), 400
+    if not meals:
+        return jsonify({'error': 'meals[] required'}), 400
+
+    log = _load_nutrition_log()
+    if date_str not in log:
+        log[date_str] = []
+
+    # Append each meal as an entry (compatible with existing format)
+    for meal in meals:
+        log[date_str].append({
+            'item': meal.get('item', 'Unknown'),
+            'calories': meal.get('calories', 0),
+            'protein': meal.get('protein', 0),
+            'carbs': meal.get('carbs', 0),
+            'fat': meal.get('fat', 0),
+        })
+
+    # Store metadata (bmr, exercise_calories, deficit, status) as a special entry
+    meta_keys = ('bmr', 'exercise_calories', 'deficit', 'status')
+    if any(body.get(k) is not None for k in meta_keys):
+        # Remove old meta entry for this date if exists
+        log[date_str] = [e for e in log[date_str] if not e.get('_meta')]
+        log[date_str].append({
+            '_meta': True,
+            'bmr': body.get('bmr', 2030),
+            'exercise_calories': body.get('exercise_calories', 0),
+            'deficit': body.get('deficit', 0),
+            'status': body.get('status', 'partial'),
+        })
+
+    _save_nutrition_log(log)
+
+    # Calculate totals from non-meta entries
+    real_entries = [e for e in log[date_str] if not e.get('_meta')]
+    totals = _nutrition_totals(real_entries)
+    protein_remaining = max(0, PROTEIN_TARGET - totals['protein'])
+
+    return jsonify({
+        'success': True,
+        'date': date_str,
+        'totals': totals,
+        'meal_count': len(real_entries),
+        'protein_target': PROTEIN_TARGET,
+        'protein_remaining': protein_remaining,
     })
 
 
@@ -835,6 +903,9 @@ def weight_debug():
 
     return jsonify(info)
 
+
+NUTRITION_API_KEY = os.environ.get('NUTRITION_API_KEY')
+PROTEIN_TARGET = 175
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
