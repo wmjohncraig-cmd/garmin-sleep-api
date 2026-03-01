@@ -24,6 +24,17 @@ JSONBIN_STRENGTH_BIN_ID = os.environ.get('JSONBIN_STRENGTH_BIN_ID')
 
 ATHLETE_HEIGHT_INCHES = 77  # John Craig, 6'5"
 
+# Weight filter — shared Withings scale with spouse
+# Reject readings outside ±10% of reference weight
+VALID_WEIGHT_CENTER_LBS = 227
+VALID_WEIGHT_TOLERANCE = 0.10
+VALID_WEIGHT_MIN = VALID_WEIGHT_CENTER_LBS * (1 - VALID_WEIGHT_TOLERANCE)  # ~204
+VALID_WEIGHT_MAX = VALID_WEIGHT_CENTER_LBS * (1 + VALID_WEIGHT_TOLERANCE)  # ~250
+
+def _is_valid_weight_lbs(w):
+    """Return True if weight is within John's plausible range."""
+    return w is not None and VALID_WEIGHT_MIN <= w <= VALID_WEIGHT_MAX
+
 WITHINGS_CLIENT_ID = os.environ.get('WITHINGS_CLIENT_ID')
 WITHINGS_CLIENT_SECRET = os.environ.get('WITHINGS_CLIENT_SECRET')
 WITHINGS_REDIRECT_URI = 'https://garmin-sleep-api.onrender.com/withings/callback'
@@ -341,9 +352,22 @@ def get_withings_weight():
         raise Exception('No Withings measurements found')
 
     # Collect metrics across recent groups (different metrics may be in different groups)
+    # Filter out readings from shared scale that belong to spouse
     metrics = {}
     latest_ts = 0
-    for grp in groups[:10]:  # check up to 10 most recent groups
+    for grp in groups[:20]:  # check up to 20 recent groups (may need to skip spouse's)
+        # Check if this group has a weight reading — if so, validate it
+        grp_weight_kg = None
+        for m in grp.get('measures', []):
+            if m.get('type') == 1:  # weight
+                grp_weight_kg = m['value'] * (10 ** m['unit'])
+                break
+        if grp_weight_kg is not None:
+            grp_weight_lbs = grp_weight_kg * 2.20462
+            if not _is_valid_weight_lbs(grp_weight_lbs):
+                grp_ts = grp.get('date', 0)
+                print(f"[WEIGHT FILTER] Rejected: {grp_weight_lbs:.1f} lbs at {date.fromtimestamp(grp_ts).isoformat() if grp_ts else '?'} (valid range: {VALID_WEIGHT_MIN:.0f}-{VALID_WEIGHT_MAX:.0f})")
+                continue  # skip this entire group (spouse's reading)
         for m in grp.get('measures', []):
             mtype = m.get('type')
             if mtype in _WITHINGS_TYPES and _WITHINGS_TYPES[mtype] not in metrics:
@@ -704,8 +728,13 @@ def withings_weight_history():
             for m in grp.get('measures', []):
                 if m.get('type') == 1:
                     weight_kg = m['value'] * (10 ** m['unit'])
+                    weight_lbs = round(weight_kg * 2.20462, 1)
+                    if not _is_valid_weight_lbs(weight_lbs):
+                        d = date.fromtimestamp(grp['date']).isoformat()
+                        print(f"[WEIGHT FILTER] History rejected: {weight_lbs} lbs on {d}")
+                        continue
                     d = date.fromtimestamp(grp['date']).isoformat()
-                    by_date[d] = round(weight_kg * 2.20462, 1)
+                    by_date[d] = weight_lbs
         result = [{'date': d, 'weight_lbs': w} for d, w in sorted(by_date.items())]
         return jsonify(result)
     except Exception as e:
@@ -714,7 +743,20 @@ def withings_weight_history():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok'})
+    garmin_ok = _client is not None
+    withings_ok = False
+    try:
+        tok = _load_withings_token()
+        withings_ok = tok is not None and 'access_token' in (tok or {})
+    except Exception:
+        pass
+    jsonbin_ok = bool(JSONBIN_API_KEY and JSONBIN_BIN_ID)
+    return jsonify({
+        'status': 'ok',
+        'garmin_auth': garmin_ok,
+        'withings_auth': withings_ok,
+        'jsonbin': jsonbin_ok
+    })
 
 @app.route('/garmin-sleep')
 def garmin_sleep():
@@ -1064,6 +1106,7 @@ def garmin_activities():
                 'duration': act.get('duration'),
                 'movingDuration': act.get('movingDuration'),
                 'elevationGain': act.get('elevationGain'),
+                'elevationLoss': act.get('elevationLoss'),
                 'calories': act.get('calories'),
                 'averageHR': act.get('averageHR'),
                 'maxHR': act.get('maxHR'),
@@ -1072,7 +1115,18 @@ def garmin_activities():
                 'trainingEffect': act.get('aerobicTrainingEffect'),
                 'anaerobicTrainingEffect': act.get('anaerobicTrainingEffect'),
                 'vO2MaxValue': act.get('vO2MaxValue'),
+                'avgPower': act.get('avgPower'),
+                'maxPower': act.get('maxPower'),
             }
+
+            # Training effect classification
+            te = enriched['trainingEffect']
+            if te is not None:
+                if te >= 4.0: enriched['trainingEffectLabel'] = 'VO2 Max'
+                elif te >= 3.0: enriched['trainingEffectLabel'] = 'Threshold'
+                elif te >= 2.0: enriched['trainingEffectLabel'] = 'Tempo'
+                elif te >= 1.0: enriched['trainingEffectLabel'] = 'Base (Low Aerobic)'
+                else: enriched['trainingEffectLabel'] = 'Recovery'
 
             # Run dynamics (already in activity list response)
             type_key = enriched['activityType']
@@ -1086,6 +1140,18 @@ def garmin_activities():
                     'avgVerticalOscillation': act.get('avgVerticalOscillation'),
                     'avgVerticalRatio': act.get('avgVerticalRatio'),
                 }
+
+            # Fetch activity detail for additional fields (power, etc.)
+            if type_key in ('running', 'trail_running', 'treadmill_running'):
+                try:
+                    detail = client.connectapi(f'/activity-service/activity/{aid}')
+                    if isinstance(detail, dict):
+                        if not enriched.get('avgPower'):
+                            enriched['avgPower'] = detail.get('avgPower') or detail.get('summaryDTO', {}).get('averagePower')
+                        if not enriched.get('maxPower'):
+                            enriched['maxPower'] = detail.get('maxPower') or detail.get('summaryDTO', {}).get('maxPower')
+                except Exception:
+                    pass
 
             # Fetch laps/splits
             try:
@@ -1106,12 +1172,41 @@ def garmin_activities():
                         'elevationGain': lap.get('elevationGain'),
                         'elevationLoss': lap.get('elevationLoss'),
                     }
-                    # Run-specific lap fields
+                    # Run-specific lap fields (full dynamics per lap)
                     if type_key in ('running', 'trail_running', 'treadmill_running'):
                         lap_data['averageRunCadence'] = lap.get('averageRunCadence')
                         lap_data['strideLength'] = lap.get('strideLength')
+                        lap_data['avgVerticalOscillation'] = lap.get('avgVerticalOscillation')
+                        lap_data['avgGroundContactTime'] = lap.get('avgGroundContactTime')
+                        lap_data['avgGroundContactBalance'] = lap.get('avgGroundContactBalance')
                     laps.append(lap_data)
                 enriched['laps'] = laps
+
+                # Calculate GAP (Grade Adjusted Pace) for runs with elevation
+                if type_key in ('running', 'trail_running', 'treadmill_running') and laps:
+                    total_gap_time = 0
+                    total_gap_dist = 0
+                    for lap in laps:
+                        lap_dist = lap.get('distance') or 0
+                        lap_dur = lap.get('movingDuration') or lap.get('duration') or 0
+                        lap_gain = lap.get('elevationGain') or 0
+                        lap_loss = lap.get('elevationLoss') or 0
+                        if lap_dist > 0 and lap_dur > 0:
+                            # Grade = net elevation change / horizontal distance
+                            grade = (lap_gain - lap_loss) / lap_dist if lap_dist > 0 else 0
+                            # Strava-style GAP adjustment: ~12% per 1% grade uphill, ~7% per 1% downhill
+                            grade_pct = grade * 100
+                            if grade_pct > 0:
+                                adjustment = 1 + (grade_pct * 0.033)  # uphill makes flat-equivalent faster
+                            else:
+                                adjustment = 1 + (grade_pct * 0.018)  # downhill modest benefit
+                            gap_speed = (lap_dist / lap_dur) * adjustment
+                            gap_dur = lap_dist / gap_speed if gap_speed > 0 else lap_dur
+                            lap['gapSpeed'] = round(gap_speed, 3)
+                            total_gap_time += gap_dur
+                            total_gap_dist += lap_dist
+                    if total_gap_dist > 0:
+                        enriched['gapSpeed'] = round(total_gap_dist / total_gap_time, 3)
             except Exception as e:
                 enriched['laps'] = []
                 enriched['lapsError'] = str(e)
