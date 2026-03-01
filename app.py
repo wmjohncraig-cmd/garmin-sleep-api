@@ -1027,36 +1027,51 @@ def coaching_audit():
     # Append coaching principles so the auditor always sees them
     if _COACHING_PRINCIPLES:
         brief += '\n\n===COACHING PRINCIPLES — READ BEFORE RESPONDING===\n\n' + _COACHING_PRINCIPLES
-    try:
-        resp = req_lib.post(
-            'https://api.anthropic.com/v1/messages',
-            headers={
-                'x-api-key': ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-            },
-            json={
-                'model': 'claude-haiku-4-5-20251001',
-                'max_tokens': 2048,
-                'system': AUDIT_SYSTEM_PROMPT,
-                'messages': [{'role': 'user', 'content': brief}],
-            },
-            timeout=45,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data['content'][0]['text']
-        # Strip markdown code fences and trailing text that Haiku sometimes adds
-        import re
-        m = re.search(r'\{[\s\S]*\}', text)
-        if m:
-            text = m.group(0)
-        audit = json.loads(text)
-        return jsonify(audit)
-    except json.JSONDecodeError:
-        return jsonify({'error': 'Failed to parse audit response', 'raw': text}), 502
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    import re
+    last_attempt_text = ''
+    for attempt in range(2):  # retry once on failure
+        try:
+            resp = req_lib.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={
+                    'x-api-key': ANTHROPIC_API_KEY,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                },
+                json={
+                    'model': 'claude-haiku-4-5-20251001',
+                    'max_tokens': 2048,
+                    'system': AUDIT_SYSTEM_PROMPT,
+                    'messages': [{'role': 'user', 'content': brief}],
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data['content'][0]['text']
+            last_attempt_text = text
+            # Strip markdown code fences and trailing text that Haiku sometimes adds
+            m = re.search(r'\{[\s\S]*\}', text)
+            if m:
+                text = m.group(0)
+            audit = json.loads(text)
+            return jsonify(audit)
+        except json.JSONDecodeError:
+            if attempt == 0:
+                continue  # retry
+            return jsonify({
+                'error': 'Failed to parse audit response',
+                'raw': last_attempt_text[:500],
+                'overall_risk': 'UNKNOWN',
+                'sub10_trajectory': 'UNKNOWN',
+                'flags': [{'category': 'SYSTEM', 'severity': 'LOW', 'issue': 'Audit response was not valid JSON', 'recommendation': 'Retry later'}],
+                'green_lights': [],
+                'tomorrow_modification': 'NONE',
+            }), 200  # Return 200 with fallback structure so frontend doesn't break
+        except Exception as e:
+            if attempt == 0:
+                continue  # retry
+            return jsonify({'error': str(e)}), 500
 
 
 @app.route('/garmin-activities')
