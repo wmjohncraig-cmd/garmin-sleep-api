@@ -797,7 +797,8 @@ _eight_sleep_cache = {'data': None, 'ts': 0}
 def eight_sleep_sleep():
     """Fetch last night's sleep data from Eight Sleep Pod via pyEight."""
     if not EIGHT_SLEEP_EMAIL or not EIGHT_SLEEP_PASSWORD:
-        return jsonify({'error': 'EIGHT_SLEEP_EMAIL / EIGHT_SLEEP_PASSWORD not configured'}), 500
+        return jsonify({'error': 'EIGHT_SLEEP_EMAIL / EIGHT_SLEEP_PASSWORD not configured',
+                        'email_set': bool(EIGHT_SLEEP_EMAIL), 'password_set': bool(EIGHT_SLEEP_PASSWORD)}), 500
 
     # Cache for 10 minutes
     if _eight_sleep_cache['data'] and (time.time() - _eight_sleep_cache['ts']) < 600:
@@ -813,9 +814,7 @@ def eight_sleep_sleep():
             timezone='America/Chicago',
         )
         try:
-            success = await eight.start()
-            if not success:
-                return {'error': 'Eight Sleep authentication failed — start() returned False'}
+            await eight.start()
 
             await eight.update_user_data()
 
@@ -824,10 +823,9 @@ def eight_sleep_sleep():
                 return {'error': 'No Eight Sleep users found'}
 
             user = list(eight.users.values())[0]
-            vals = user.current_values or {}
-            breakdown = vals.get('breakdown', {}) or {}
 
-            # Sleep stage durations (seconds → hours)
+            # Sleep stage breakdown from current_sleep_breakdown
+            breakdown = user.current_sleep_breakdown or {}
             deep_secs = breakdown.get('deep', 0) or 0
             rem_secs = breakdown.get('rem', 0) or 0
             light_secs = breakdown.get('light', 0) or 0
@@ -843,35 +841,25 @@ def eight_sleep_sleep():
             deep_plus_rem = round((deep_secs + rem_secs) / 3600, 1)
             in_bed_hours = round(total_in_bed_secs / 3600, 1)
 
-            # HR and respiratory rate from current values
-            heart_rate = vals.get('heart_rate')
-            resp_rate = vals.get('resp_rate')
-            sleep_score = vals.get('score')
-            bed_temp_c = vals.get('bed_temp')
-            room_temp_c = vals.get('room_temp')
-            tnt = vals.get('tnt')
-            session_date = str(vals.get('date', ''))[:10] if vals.get('date') else None
+            # Also try time_slept property as fallback for sleep_hours
+            if total_sleep_secs == 0 and user.time_slept:
+                sleep_hours = round(user.time_slept / 3600, 1)
 
-            # HRV — not exposed as a property, dig into raw intervals
-            hrv_avg = None
-            try:
-                intervals = user.intervals
-                if intervals and len(intervals) > 0:
-                    ts_data = intervals[0].get('timeseries', {})
-                    hrv_series = ts_data.get('hrv', [])
-                    if hrv_series:
-                        hrv_vals = [v[1] for v in hrv_series if v[1] is not None and v[1] > 0]
-                        if hrv_vals:
-                            hrv_avg = round(sum(hrv_vals) / len(hrv_vals), 1)
-            except Exception:
-                pass
+            # Properties exposed directly by lukas-clarke fork
+            heart_rate = user.current_heart_rate
+            hrv_avg = user.current_hrv
+            resp_rate = user.current_breath_rate or user.current_resp_rate
+            sleep_score = user.current_sleep_score
+            bed_temp_c = user.current_bed_temp
+            room_temp_c = user.current_room_temp
+            tnt = user.current_tnt
+            session_date = str(user.current_session_date)[:10] if user.current_session_date else None
 
-            # HR min during sleep — from timeseries
+            # HR min from timeseries if available
             hr_min = None
             try:
-                intervals = user.intervals
-                if intervals and len(intervals) > 0:
-                    ts_data = intervals[0].get('timeseries', {})
+                if hasattr(user, 'intervals') and user.intervals:
+                    ts_data = user.intervals[0].get('timeseries', {})
                     hr_series = ts_data.get('heartRate', [])
                     if hr_series:
                         hr_vals = [v[1] for v in hr_series if v[1] is not None and v[1] > 30]
@@ -891,10 +879,10 @@ def eight_sleep_sleep():
                 'light_hours': light_hrs,
                 'awake_hours': awake_hrs,
                 'deep_plus_rem_hours': deep_plus_rem,
-                'hrv': hrv_avg,
-                'heart_rate_avg': heart_rate,
+                'hrv': round(hrv_avg, 1) if hrv_avg is not None else None,
+                'heart_rate_avg': round(heart_rate, 1) if heart_rate is not None else None,
                 'heart_rate_min': hr_min,
-                'respiratory_rate': resp_rate,
+                'respiratory_rate': round(resp_rate, 1) if resp_rate is not None else None,
                 'bed_temp_c': round(bed_temp_c, 1) if bed_temp_c is not None else None,
                 'bed_temp_f': round(bed_temp_c * 9/5 + 32, 1) if bed_temp_c is not None else None,
                 'room_temp_c': round(room_temp_c, 1) if room_temp_c is not None else None,
