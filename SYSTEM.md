@@ -86,13 +86,18 @@ POST /benchmarks/store (API key required) → JSONBin → GET /benchmarks → Da
 ```
 - **Storage**: JSONBin bin `JSONBIN_BENCHMARK_BIN_ID`
 
-### 8. Coaching Audit
+### 8. Coaching Audit v2.0
 ```
-Brief text → POST /coaching-audit → Anthropic Claude API → AI analysis response
+Brief text + trend data + plan → POST /coaching-audit → Claude Sonnet → structured audit
 ```
-- **Model**: `claude-haiku-4-5-20251001`
-- **System prompt**: `COACHING_PRINCIPLES.md`
-- **Stateless** — no persistent storage
+- **Model**: `claude-sonnet-4-20250514` (upgraded from haiku for strategic depth)
+- **System prompt**: Full evidence-based Ironman training principles embedded in `AUDIT_V2_SYSTEM_PROMPT`
+- **Inputs**: brief text, weight, days_to_race, trend_data (4-week aggregates), plan_text
+- **Output**: Plain text audit with VERDICT, TOP 3 CONCERNS, DETAILED ASSESSMENT (10 areas), RECOMMENDED ACTIONS
+- **Dashboard cache**: `imtx_audit_cache` (6hr TTL) — won't re-run within same window
+- **Trend data**: Computed client-side from cached Strava activities (weekly TSS, longest ride/run, brick runs, weight)
+- **Training plan**: Optional, stored in JSONBin `JSONBIN_PLAN_BIN_ID` via `GET/POST /training-plan`
+- **Weekly trends**: Stored alongside plan in same bin via `GET/POST /trends/weekly`
 
 ## JSONBin Bins (All on Render)
 
@@ -103,6 +108,7 @@ Brief text → POST /coaching-audit → Anthropic Claude API → AI analysis res
 | `JSONBIN_STRENGTH_BIN_ID` | Strength training sessions |
 | `JSONBIN_WITHINGS_BIN_ID` | Withings OAuth tokens + weight history |
 | `JSONBIN_BENCHMARK_BIN_ID` | Run benchmark activities |
+| `JSONBIN_PLAN_BIN_ID` | Training plan + weekly trends (optional) |
 
 ## Dashboard Caching Strategy
 
@@ -122,6 +128,7 @@ All API calls use `resilientFetch()` which:
 | `imtx_garmin_activities` | 1 hr | Recent Garmin activities |
 | `imtx_activities` | 24 hr | Strava activities |
 | `imtx_benchmarks` | 1 hr | Run benchmarks |
+| `imtx_audit_cache` | 6 hr | Coaching audit result |
 
 ## Render Environment Variables
 

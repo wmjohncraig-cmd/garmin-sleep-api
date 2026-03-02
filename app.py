@@ -1006,56 +1006,109 @@ PROTEIN_TARGET = 175
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
-AUDIT_SYSTEM_PROMPT = """You are a world-class Ironman triathlon coaching auditor for a specific athlete.
+AUDIT_V2_SYSTEM_PROMPT = """You are an elite Ironman triathlon coach performing an independent audit of another coach's training plan and daily execution. You have coached multiple Kona qualifiers and sub-9 Ironman athletes. Your job is to identify strategic coaching errors, not nitpick daily numbers.
 
-CRITICAL: The brief contains a section called "COACHING PRINCIPLES — READ BEFORE RESPONDING". Those principles are NON-NEGOTIABLE. You MUST audit against them, not against generic Ironman templates. If a generic coaching rule contradicts the athlete's principles, the principles win.
+You are auditing the preparation of the following athlete:
+- John Craig, 41 years old, 6'5", current weight {weight} lbs, target race weight 215 lbs
+- Race: Memorial Hermann Ironman Texas, April 18 2026, {days_to_race} days away
+- Goal: Sub-10 hours
+- FTP: 320W, race power target 238W NP (74% FTP)
+- Run fitness: 15mi@8:27 (fresh/flat), easy pace 8:45-9:00, race pace 8:33/mi
+- Key limiter: Muscular failure before cardiac failure. Zero cardiac drift over 2+ hour runs. 225+ lbs = 675-900 lbs impact force per stride. Every pound above 215 degrades marathon.
+- Training model: Hunter Bell — bike builds aerobic base, max 4 runs/week, every run has purpose, no junk easy runs
+- Currently on double sessions daily (bike+run morning, swim lunch). Never takes rest days.
 
-KEY PRINCIPLES TO INTERNALIZE:
-- HUNTER BELL MODEL: The bike is the aerobic base, not the run. Easy cardio goes on the bike. This is deliberate and optimal for a multi-race athlete who must stay healthy all year.
-- RUN VOLUME: Max 3-4 runs/week. Every run has a purpose (brick or long run only). NEVER flag low run volume or low run miles as a risk. Instead, flag INJURY RISK if run volume is too high.
-- TSS DISTRIBUTION: Do NOT apply generic 35:45:20 run:bike:swim ratios. Bike-heavy distribution is correct for this athlete. Never recommend increasing run load to hit arbitrary ratios.
-- SATURDAY BIKE: Max 3.5-4hr when Sunday long run follows. Never recommend 5hr+ bikes before a long run day.
-- BRICK RUNS: Distance and pace coached day-by-day based on readiness. Do not impose fixed distances.
-- LONG RUNS: Effort-based, not pace-based. Never impose a fixed pace ceiling.
+EVIDENCE-BASED TRAINING PRINCIPLES YOU MUST EVALUATE AGAINST:
 
-WHAT TO AUDIT:
-1. CTL ramp rate — should be +1 to +3 TSS/week in build phase
-2. Long run presence — must appear weekly (Sunday)
-3. Swim pace progression toward 1:48/100yd target
-4. Nutrition — flag underfueling, deficit >800 cal, protein <175g
-5. Sleep — Deep+REM under 3hrs should modify next day load
-6. Bike intensity — NP should progress toward race watts target
-7. Recovery adequacy — TSB should not go below -30
-8. Race day readiness trajectory
-9. VO2 Max work — at least 1 session/week with HR >163 bpm
-10. Threshold work — at least 2 sessions/week with sustained HR 150-162 for 20+ minutes
-11. HR ceiling — if max HR across all activities this week is under 155, flag as HIGH severity
-12. Injury risk — flag if runs are too close together, too many runs in a week, or hard run + long run back to back
-13. Compliance with athlete's coaching principles (appended to the brief)
+BIKE:
+- Ironman long rides must build to 5-7 hours (3 hours is 70.3 territory)
+- Sustained race-power blocks (60-90 min at race NP) inside long rides are essential
+- Last big ride should be 3 weeks before race day
+- "Big Day" dress rehearsal: 5hr+ bike with race power blocks → 60-75min run at race pace, with full race nutrition. Do this once, 3-4 weeks pre-race.
+- Progressive power finish on long rides (last 45-60min building to race power) teaches pacing and fatigue resistance
+- IF for Ironman race: 0.70-0.75. Training long rides should practice this intensity.
+- On-bike nutrition must reach 90g+ carbs/hr and be practiced on every long ride
 
-Return ONLY a JSON object (no markdown, no code fences):
-{
-  "overall_risk": "LOW/MEDIUM/HIGH",
-  "sub10_trajectory": "ON TRACK/NEEDS WORK/AT RISK",
-  "flags": [
-    {
-      "category": "CATEGORY NAME",
-      "severity": "HIGH/MEDIUM/LOW",
-      "issue": "description",
-      "recommendation": "specific fix"
-    }
-  ],
-  "green_lights": ["things going well"],
-  "tomorrow_modification": "any changes to prescribed workout or NONE"
-}"""
+RUN:
+- Peak long run for competitive Ironman: 2.5-3 hours. For a 225+ lb athlete: cap at 2:30 (recovery cost scales exponentially with weight past 16 miles)
+- A 70.3 race at full effort counts as a long run progression step
+- Long runs should be on FRESH legs (not day after long bike) — injury risk too high for heavy athletes
+- Brick runs build to 60-75 min at race pace off the bike (not 20-30 min)
+- Progressive finish long runs: last 20-30 min at race pace teaches legs to produce force when depleted
+- Every run must have a specific purpose. No junk easy runs.
+- Max 4 runs/week. Never hard + long back to back. 3 run-free days minimum.
+- "Low and forward" cue for vertical oscillation. Target < 8.5cm. Monitor every run.
+- Bent knee calf raises 3x15 pre-run = Achilles/soleus prehab. Non-negotiable.
 
-# Load coaching principles once at startup
-_COACHING_PRINCIPLES = ''
-try:
-    with open(os.path.join(os.path.dirname(__file__), 'COACHING_PRINCIPLES.md')) as _f:
-        _COACHING_PRINCIPLES = _f.read()
-except Exception:
-    pass
+SWIM:
+- Pool access 1 hour max. Warmup + drills <= 10 min. Maximize main set water time.
+- No pool access Sunday. Never schedule swimming on Sunday.
+- 25-yard pool. All programming in yards.
+
+STRENGTH:
+- Currently transitioning from max strength (3x5 heavy) to muscular endurance (3x15-20, slow eccentrics, lighter load)
+- Single leg movements preferred — mirrors triathlon mechanics, catches imbalances
+- Target muscles: quads, glutes, hamstrings
+- Garage gym, no machines
+
+WEIGHT:
+- Must lose {weight_to_lose} lbs in {days_to_race} days
+- Requires ~{deficit_per_day} cal/day deficit
+- Every pound above 215 = 3-4 lbs additional impact force x 36,000 strides in the marathon
+- Calorie-dense snacks (PB balls, etc.) are budget-busters
+- Big training days ~4,100 cal, light days ~2,800 cal
+
+RECOVERY:
+- Sleep: bed 9pm, wake 4am. Deep+REM target: 3+ hours good, 4+ hours optimal
+- TSB management: overreaching at < -20. Race day target TSB: +5 to +15
+- Dallas 70.3 March 15 = full send race. Post-race skiing March 16-20 = forced recovery. Resume March 21.
+- Age 41 = longer recovery than younger athletes. 70.3 needs 7-10 days recovery.
+
+TAPER:
+- Begin 2-3 weeks pre-race (late March / early April)
+- Week 1 taper: volume -40%, maintain intensity in short openers
+- Race week: volume -70%, activation only
+- Last long ride: 3 weeks pre-race
+- Last quality run: 10-12 days pre-race
+
+PERIODIZATION:
+- Current phase: BUILD 1 (volume + threshold development)
+- Dallas 70.3 March 15 is both A-race and IMTX training stimulus
+- Final build: March 21 - April 5 (two critical weeks)
+- Taper: April 6-17
+- Race: April 18
+
+Given the daily brief data and any trend/plan context provided, evaluate:
+
+1. STRATEGIC DIRECTION: Is the overall training trajectory aligned with sub-10 Ironman preparation? Are we building the right systems at the right time?
+2. LONG RIDE PROGRAMMING: Are long rides reaching appropriate duration and including race-specific power blocks? Is the Big Day dress rehearsal scheduled?
+3. LONG RUN PROGRAMMING: Is the long run appropriately capped? On fresh legs? Progressive finish included?
+4. BRICK QUALITY: Are brick runs building toward 60-75 min at race pace? Or are they token 20-30 min jogs?
+5. RACE SPECIFICITY: How much time is being spent at actual Ironman race intensities (238W on bike, 8:33/mi on run)?
+6. WEIGHT TRAJECTORY: Is the athlete on track for 215 by race day? Is the caloric deficit being maintained?
+7. INJURY RISK: Run volume, back-to-back hard days, compensation patterns (GCT imbalance), vertical oscillation degradation, overreaching (TSB)?
+8. TAPER READINESS: Is CTL where it needs to be to begin taper? Will the taper timeline deliver TSB +5 to +15 by race day?
+9. RACE NUTRITION: Is on-bike and on-run fueling being practiced at race-level amounts?
+10. WHAT'S MISSING: What critical training elements are absent or underemphasized?
+
+Format your response EXACTLY as plain text (NOT JSON, NOT markdown):
+
+AUDIT VERDICT: [ON TRACK / CAUTION / OFF TRACK]
+
+TOP 3 CONCERNS:
+1. [Most critical issue with specific numbers]
+2. [Second most critical]
+3. [Third most critical]
+
+WHAT'S WORKING:
+- [Bullet points of things going well]
+
+DETAILED ASSESSMENT:
+[Numbered responses to each of the 10 evaluation areas. Be specific. Reference actual numbers from the brief. Don't be diplomatic — be direct about what's wrong.]
+
+RECOMMENDED ACTIONS (next 7 days):
+- [Specific, actionable items ranked by priority]"""
+
 
 @app.route('/coaching-audit', methods=['POST'])
 def coaching_audit():
@@ -1065,12 +1118,36 @@ def coaching_audit():
     brief = body.get('brief', '')
     if not brief:
         return jsonify({'error': 'brief text required'}), 400
-    # Append coaching principles so the auditor always sees them
-    if _COACHING_PRINCIPLES:
-        brief += '\n\n===COACHING PRINCIPLES — READ BEFORE RESPONDING===\n\n' + _COACHING_PRINCIPLES
-    import re
-    last_attempt_text = ''
-    for attempt in range(2):  # retry once on failure
+
+    # Extract dynamic values for system prompt
+    weight = body.get('weight', 227)
+    days_to_race = body.get('days_to_race', 48)
+    weight_to_lose = max(0, round(weight - 215, 1))
+    deficit_per_day = round(weight_to_lose * 3500 / max(1, days_to_race)) if days_to_race > 0 else 750
+
+    system_prompt = AUDIT_V2_SYSTEM_PROMPT.format(
+        weight=weight,
+        days_to_race=days_to_race,
+        weight_to_lose=weight_to_lose,
+        deficit_per_day=deficit_per_day,
+    )
+
+    # Build user message with brief + optional trend/plan context
+    user_parts = [f"Here is today's daily coaching brief:\n\n{brief}"]
+
+    trend_data = body.get('trend_data')
+    if trend_data:
+        user_parts.append(f"\nLast 4 weeks trend data:\n{trend_data}")
+    else:
+        user_parts.append("\n(No trend data available — audit based on today's brief only)")
+
+    plan_text = body.get('plan_text')
+    if plan_text:
+        user_parts.append(f"\nCurrent training plan for next 2 weeks:\n{plan_text}")
+
+    user_message = '\n'.join(user_parts)
+
+    for attempt in range(2):
         try:
             resp = req_lib.post(
                 'https://api.anthropic.com/v1/messages',
@@ -1080,39 +1157,90 @@ def coaching_audit():
                     'content-type': 'application/json',
                 },
                 json={
-                    'model': 'claude-haiku-4-5-20251001',
-                    'max_tokens': 2048,
-                    'system': AUDIT_SYSTEM_PROMPT,
-                    'messages': [{'role': 'user', 'content': brief}],
+                    'model': 'claude-sonnet-4-20250514',
+                    'max_tokens': 4096,
+                    'system': system_prompt,
+                    'messages': [{'role': 'user', 'content': user_message}],
                 },
                 timeout=60,
             )
             resp.raise_for_status()
             data = resp.json()
             text = data['content'][0]['text']
-            last_attempt_text = text
-            # Strip markdown code fences and trailing text that Haiku sometimes adds
-            m = re.search(r'\{[\s\S]*\}', text)
-            if m:
-                text = m.group(0)
-            audit = json.loads(text)
-            return jsonify(audit)
-        except json.JSONDecodeError:
-            if attempt == 0:
-                continue  # retry
-            return jsonify({
-                'error': 'Failed to parse audit response',
-                'raw': last_attempt_text[:500],
-                'overall_risk': 'UNKNOWN',
-                'sub10_trajectory': 'UNKNOWN',
-                'flags': [{'category': 'SYSTEM', 'severity': 'LOW', 'issue': 'Audit response was not valid JSON', 'recommendation': 'Retry later'}],
-                'green_lights': [],
-                'tomorrow_modification': 'NONE',
-            }), 200  # Return 200 with fallback structure so frontend doesn't break
+            return jsonify({'audit_text': text, 'version': '2.0'})
         except Exception as e:
             if attempt == 0:
-                continue  # retry
-            return jsonify({'error': str(e)}), 500
+                continue
+            return jsonify({'error': str(e), 'audit_text': None}), 500
+
+
+# ── Training Plan & Trends Storage ────────────────────────────
+JSONBIN_PLAN_BIN_ID = os.environ.get('JSONBIN_PLAN_BIN_ID')
+
+@app.route('/training-plan', methods=['GET'])
+def get_training_plan():
+    """Return current training plan text."""
+    if not JSONBIN_API_KEY or not JSONBIN_PLAN_BIN_ID:
+        return jsonify({'plan': None, 'error': 'Plan storage not configured'})
+    try:
+        r = _jsonbin_request('GET', JSONBIN_PLAN_BIN_ID)
+        if r and r.ok:
+            data = r.json().get('record', {})
+            return jsonify(data)
+        return jsonify({'plan': None})
+    except Exception as e:
+        return jsonify({'plan': None, 'error': str(e)})
+
+@app.route('/training-plan', methods=['POST'])
+def save_training_plan():
+    """Save training plan text."""
+    if not JSONBIN_API_KEY or not JSONBIN_PLAN_BIN_ID:
+        return jsonify({'error': 'Plan storage not configured'}), 500
+    body = request.get_json(force=True) or {}
+    try:
+        _jsonbin_request('PUT', JSONBIN_PLAN_BIN_ID, body)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/trends/weekly', methods=['GET'])
+def get_weekly_trends():
+    """Return stored weekly trend data."""
+    if not JSONBIN_API_KEY or not JSONBIN_PLAN_BIN_ID:
+        return jsonify({'weeks': [], 'error': 'Trend storage not configured'})
+    try:
+        r = _jsonbin_request('GET', JSONBIN_PLAN_BIN_ID)
+        if r and r.ok:
+            data = r.json().get('record', {})
+            return jsonify({'weeks': data.get('weekly_trends', [])})
+        return jsonify({'weeks': []})
+    except Exception as e:
+        return jsonify({'weeks': [], 'error': str(e)})
+
+@app.route('/trends/weekly', methods=['POST'])
+def save_weekly_trends():
+    """Append or replace weekly trend data."""
+    if not JSONBIN_API_KEY or not JSONBIN_PLAN_BIN_ID:
+        return jsonify({'error': 'Trend storage not configured'}), 500
+    body = request.get_json(force=True) or {}
+    try:
+        r = _jsonbin_request('GET', JSONBIN_PLAN_BIN_ID)
+        data = r.json().get('record', {}) if r and r.ok else {}
+        if body.get('replace'):
+            data['weekly_trends'] = body.get('weeks', [])
+        else:
+            existing = data.get('weekly_trends', [])
+            new_weeks = body.get('weeks', [])
+            # Merge by week_start date, replacing existing entries
+            by_date = {w['week_start']: w for w in existing}
+            for w in new_weeks:
+                by_date[w['week_start']] = w
+            data['weekly_trends'] = sorted(by_date.values(), key=lambda w: w.get('week_start', ''))
+        _jsonbin_request('PUT', JSONBIN_PLAN_BIN_ID, data)
+        return jsonify({'success': True, 'count': len(data['weekly_trends'])})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/garmin-activities')
