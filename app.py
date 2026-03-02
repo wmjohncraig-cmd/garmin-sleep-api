@@ -21,6 +21,7 @@ NUTRITION_LOG = os.path.join(os.path.dirname(__file__), 'nutrition_log.json')
 JSONBIN_API_KEY = os.environ.get('JSONBIN_API_KEY')
 JSONBIN_BIN_ID = os.environ.get('JSONBIN_BIN_ID')
 JSONBIN_STRENGTH_BIN_ID = os.environ.get('JSONBIN_STRENGTH_BIN_ID')
+JSONBIN_BENCHMARK_BIN_ID = os.environ.get('JSONBIN_BENCHMARK_BIN_ID')
 
 ATHLETE_HEIGHT_INCHES = 77  # John Craig, 6'5"
 
@@ -1132,6 +1133,9 @@ def garmin_activities():
                 'vO2MaxValue': act.get('vO2MaxValue'),
                 'avgPower': act.get('avgPower'),
                 'maxPower': act.get('maxPower'),
+                'minTemperature': act.get('minTemperature'),
+                'maxTemperature': act.get('maxTemperature'),
+                'averageTemperature': act.get('averageTemperature'),
             }
 
             # Training effect classification
@@ -1165,6 +1169,22 @@ def garmin_activities():
                             enriched['avgPower'] = detail.get('avgPower') or detail.get('summaryDTO', {}).get('averagePower')
                         if not enriched.get('maxPower'):
                             enriched['maxPower'] = detail.get('maxPower') or detail.get('summaryDTO', {}).get('maxPower')
+                        # Temperature, sweat, stamina from detail/summaryDTO
+                        summary = detail.get('summaryDTO', {})
+                        for field in ('minTemperature', 'maxTemperature', 'averageTemperature',
+                                      'waterEstimated', 'waterConsumed', 'beginStamina', 'endStamina'):
+                            if not enriched.get(field):
+                                enriched[field] = summary.get(field) or detail.get(field)
+                        # Estimate sweat if unavailable
+                        if not enriched.get('waterEstimated') and not enriched.get('waterConsumed'):
+                            avg_temp = enriched.get('averageTemperature')
+                            dur_hrs = (enriched.get('movingDuration') or enriched.get('duration') or 0) / 3600
+                            if dur_hrs > 0:
+                                base_rate = 1.0  # L/hr at 20C
+                                if avg_temp is not None:
+                                    base_rate += max(0, (avg_temp - 20)) * 0.05
+                                enriched['waterEstimated'] = round(base_rate * dur_hrs, 2)
+                                enriched['sweatEstimated'] = True
                 except Exception:
                     pass
 
@@ -1194,6 +1214,7 @@ def garmin_activities():
                         lap_data['avgVerticalOscillation'] = lap.get('avgVerticalOscillation')
                         lap_data['avgGroundContactTime'] = lap.get('avgGroundContactTime')
                         lap_data['avgGroundContactBalance'] = lap.get('avgGroundContactBalance')
+                        lap_data['avgTemperature'] = lap.get('averageTemperature') or lap.get('avgTemperature')
                     laps.append(lap_data)
                 enriched['laps'] = laps
 
@@ -1242,6 +1263,36 @@ def garmin_activities():
             except Exception:
                 enriched['hrZones'] = []
 
+            # Auto-store benchmark for long runs (> 90 min)
+            if (type_key in ('running', 'trail_running') and
+                    (enriched.get('movingDuration') or 0) > 5400 and
+                    JSONBIN_API_KEY and JSONBIN_BENCHMARK_BIN_ID):
+                try:
+                    bm = {
+                        'activityId': aid,
+                        'date': enriched.get('startTimeLocal', '')[:10],
+                        'activityName': enriched.get('activityName', ''),
+                        'distance': enriched.get('distance'),
+                        'movingDuration': enriched.get('movingDuration'),
+                        'averageSpeed': enriched.get('averageSpeed'),
+                        'gapSpeed': enriched.get('gapSpeed'),
+                        'averageHR': enriched.get('averageHR'),
+                        'elevationGain': enriched.get('elevationGain'),
+                        'averageTemperature': enriched.get('averageTemperature'),
+                    }
+                    r = req_lib.get(f'https://api.jsonbin.io/v3/b/{JSONBIN_BENCHMARK_BIN_ID}/latest',
+                                    headers={'X-Master-Key': JSONBIN_API_KEY}, timeout=5)
+                    data = r.json().get('record', {})
+                    benchmarks = data.get('benchmarks', [])
+                    if not any(b.get('activityId') == aid for b in benchmarks):
+                        benchmarks.append(bm)
+                        benchmarks = benchmarks[-20:]
+                        req_lib.put(f'https://api.jsonbin.io/v3/b/{JSONBIN_BENCHMARK_BIN_ID}',
+                                    headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
+                                    json={'benchmarks': benchmarks}, timeout=5)
+                except Exception:
+                    pass
+
             results.append(enriched)
 
         return jsonify({
@@ -1251,6 +1302,48 @@ def garmin_activities():
     except Exception as e:
         global _client
         _client = None
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/benchmarks')
+def get_benchmarks():
+    if not JSONBIN_API_KEY or not JSONBIN_BENCHMARK_BIN_ID:
+        return jsonify({'benchmarks': [], 'error': 'Benchmark storage not configured'})
+    try:
+        r = req_lib.get(f'https://api.jsonbin.io/v3/b/{JSONBIN_BENCHMARK_BIN_ID}/latest',
+                        headers={'X-Master-Key': JSONBIN_API_KEY}, timeout=10)
+        data = r.json().get('record', {})
+        return jsonify({'benchmarks': data.get('benchmarks', [])})
+    except Exception as e:
+        return jsonify({'benchmarks': [], 'error': str(e)})
+
+
+@app.route('/benchmarks/store', methods=['POST'])
+def store_benchmark():
+    api_key = request.headers.get('X-API-Key') or request.args.get('key')
+    if api_key != JSONBIN_API_KEY:
+        return jsonify({'error': 'unauthorized'}), 401
+    if not JSONBIN_BENCHMARK_BIN_ID:
+        return jsonify({'error': 'Benchmark bin not configured'}), 500
+    new_benchmark = request.json
+    if not new_benchmark or not new_benchmark.get('activityId'):
+        return jsonify({'error': 'activityId required'}), 400
+    try:
+        # Fetch existing benchmarks
+        r = req_lib.get(f'https://api.jsonbin.io/v3/b/{JSONBIN_BENCHMARK_BIN_ID}/latest',
+                        headers={'X-Master-Key': JSONBIN_API_KEY}, timeout=10)
+        data = r.json().get('record', {})
+        benchmarks = data.get('benchmarks', [])
+        # Dedupe by activityId
+        benchmarks = [b for b in benchmarks if b.get('activityId') != new_benchmark['activityId']]
+        benchmarks.append(new_benchmark)
+        # Keep last 20
+        benchmarks = benchmarks[-20:]
+        req_lib.put(f'https://api.jsonbin.io/v3/b/{JSONBIN_BENCHMARK_BIN_ID}',
+                    headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
+                    json={'benchmarks': benchmarks}, timeout=10)
+        return jsonify({'ok': True, 'count': len(benchmarks)})
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
