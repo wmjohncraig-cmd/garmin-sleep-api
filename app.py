@@ -815,7 +815,7 @@ def eight_sleep_sleep():
         try:
             success = await eight.start()
             if not success:
-                return {'error': 'Eight Sleep authentication failed'}
+                return {'error': 'Eight Sleep authentication failed — start() returned False'}
 
             await eight.update_user_data()
 
@@ -915,7 +915,10 @@ def eight_sleep_sleep():
         _eight_sleep_cache['ts'] = time.time()
         return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        tb = traceback.format_exc()
+        err_msg = str(e) or f'{type(e).__name__}: (no message)'
+        return jsonify({'error': err_msg, 'traceback': tb}), 500
 
 
 @app.route('/garmin-sleep')
