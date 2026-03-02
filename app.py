@@ -1177,6 +1177,37 @@ def coaching_audit():
 # ── Training Plan & Trends Storage ────────────────────────────
 JSONBIN_PLAN_BIN_ID = os.environ.get('JSONBIN_PLAN_BIN_ID')
 
+@app.route('/setup/create-plan-bin', methods=['POST'])
+def create_plan_bin():
+    """One-time setup: create a new JSONBin bin for training plan + trends."""
+    if JSONBIN_PLAN_BIN_ID:
+        return jsonify({'error': 'Plan bin already configured', 'bin_id': JSONBIN_PLAN_BIN_ID})
+    if not JSONBIN_API_KEY:
+        return jsonify({'error': 'JSONBIN_API_KEY not set'}), 500
+    body = request.get_json(force=True) or {}
+    initial_data = body if body else {'plan': None, 'weekly_trends': [], 'race_calendar': []}
+    try:
+        r = req_lib.post(
+            'https://api.jsonbin.io/v3/b',
+            headers={
+                'X-Master-Key': JSONBIN_API_KEY,
+                'Content-Type': 'application/json',
+                'X-Bin-Name': 'imtx-training-plan',
+            },
+            json=initial_data,
+            timeout=15,
+        )
+        r.raise_for_status()
+        bin_id = r.json()['metadata']['id']
+        return jsonify({
+            'success': True,
+            'bin_id': bin_id,
+            'instruction': f'Set JSONBIN_PLAN_BIN_ID={bin_id} in Render environment variables',
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/training-plan', methods=['GET'])
 def get_training_plan():
     """Return current training plan text."""
