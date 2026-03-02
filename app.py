@@ -1016,7 +1016,7 @@ You are auditing the preparation of the following athlete:
 - Run fitness: 15mi@8:27 (fresh/flat), easy pace 8:45-9:00, race pace 8:33/mi
 - Key limiter: Muscular failure before cardiac failure. Zero cardiac drift over 2+ hour runs. 225+ lbs = 675-900 lbs impact force per stride. Every pound above 215 degrades marathon.
 - Training model: Hunter Bell — bike builds aerobic base, max 4 runs/week, every run has purpose, no junk easy runs
-- Currently on double sessions daily (bike+run morning, swim lunch). Never takes rest days.
+- Currently on double sessions daily (bike+run morning, swim lunch). Never takes rest days — this is deliberate, not an oversight. Do NOT recommend rest days. If recovery is needed, recommend easier doubles (e.g., easy spin + drill swim) instead.
 
 EVIDENCE-BASED TRAINING PRINCIPLES YOU MUST EVALUATE AGAINST:
 
@@ -1078,6 +1078,14 @@ PERIODIZATION:
 - Taper: April 6-17
 - Race: April 18
 
+CRITICAL ANALYSIS RULES:
+1. You will receive BOTH today's brief AND a full week activity log. ALWAYS check the full week log before claiming something "hasn't been done." Many training elements (bricks, race nutrition, progressive power) happen on specific days, not every day.
+2. Distinguish between "not done today" and "not done this week." Only flag something as missing if it's absent from the ENTIRE week (or multiple weeks in trend data).
+3. You will receive a RACE CALENDAR with exact dates. NEVER recommend scheduling peak sessions, Big Days, or high-volume work that conflicts with taper windows or recovery periods. Check the calendar before every recommendation.
+4. Respect athlete constraints: this athlete never takes rest days. Recommend easier doubles for recovery, not days off.
+5. A 70.3 race at full effort counts as a training stimulus equivalent to a long run. Do not flag "no long run" in a race week.
+6. Use specific numbers from the data. Don't generalize. Reference actual watts, pace, TSS, and dates.
+
 Given the daily brief data and any trend/plan context provided, evaluate:
 
 1. STRATEGIC DIRECTION: Is the overall training trajectory aligned with sub-10 Ironman preparation? Are we building the right systems at the right time?
@@ -1132,15 +1140,37 @@ def coaching_audit():
         deficit_per_day=deficit_per_day,
     )
 
-    # Build user message with brief + optional trend/plan context
+    # Build user message with brief + full context
     user_parts = [f"Here is today's daily coaching brief:\n\n{brief}"]
 
+    # Full week activity log (activity-by-activity, not just today)
+    week_summary = body.get('week_summary')
+    if week_summary:
+        user_parts.append(f"\n{week_summary}")
+    else:
+        user_parts.append("\n(No full-week activity log available — today's brief only)")
+
+    # 4-week trend data
     trend_data = body.get('trend_data')
     if trend_data:
         user_parts.append(f"\nLast 4 weeks trend data:\n{trend_data}")
-    else:
-        user_parts.append("\n(No trend data available — audit based on today's brief only)")
 
+    # Race calendar with taper windows (hardcoded — these are fixed dates)
+    from datetime import datetime as _dtc
+    from zoneinfo import ZoneInfo as _ZIc
+    ct_today = _dtc.now(_ZIc('America/Chicago')).strftime('%Y-%m-%d')
+    user_parts.append(f"""
+RACE CALENDAR & TAPER WINDOWS (today is {ct_today}):
+- Mar 15: Dallas 70.3 — FULL SEND A-race (counts as long run progression)
+- Mar 16-20: Skiing — forced recovery (no training)
+- Mar 21-Apr 5: FINAL BUILD (two critical weeks — Big Day goes here)
+- Mar 28: BIG DAY dress rehearsal — 5hr+ bike → 60-75min run, full race nutrition
+- Apr 6-17: TAPER (volume -40% week 1, -70% race week)
+- Apr 18: IRONMAN TEXAS — RACE DAY
+
+CRITICAL: Do NOT recommend scheduling Big Day or peak sessions within 2 weeks of Dallas 70.3 (Mar 15) or during taper (Apr 6+). The Big Day is specifically Mar 28.""")
+
+    # Training plan
     plan_text = body.get('plan_text')
     if plan_text:
         user_parts.append(f"\nCurrent training plan for next 2 weeks:\n{plan_text}")
