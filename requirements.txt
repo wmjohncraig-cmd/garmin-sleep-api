@@ -1,6 +1,5 @@
 flask
 flask-cors
 garth
-pyeight @ git+https://github.com/lukas-clarke/pyEight.git
 aiohttp
 httpx

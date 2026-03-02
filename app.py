@@ -792,116 +792,226 @@ def health():
     })
 
 _eight_sleep_cache = {'data': None, 'ts': 0}
+_eight_sleep_token = {'access_token': None, 'user_id': None, 'expires': 0}
+
+EIGHT_AUTH_URL = 'https://auth-api.8slp.net/v1/tokens'
+EIGHT_CLIENT_API = 'https://client-api.8slp.net/v1'
+EIGHT_CLIENT_ID = '0894c7f33bb94800a03f1f4df13a4f38'
+EIGHT_CLIENT_SECRET = 'f0954a3ed5763ba3d06834c73731a32f15f168f47d4f164751275def86db0c76'
+
+
+def _eight_sleep_auth():
+    """OAuth2 password grant to Eight Sleep API."""
+    if _eight_sleep_token['access_token'] and time.time() < _eight_sleep_token['expires'] - 120:
+        return _eight_sleep_token['access_token'], _eight_sleep_token['user_id']
+
+    resp = req_lib.post(EIGHT_AUTH_URL, json={
+        'client_id': EIGHT_CLIENT_ID,
+        'client_secret': EIGHT_CLIENT_SECRET,
+        'grant_type': 'password',
+        'username': EIGHT_SLEEP_EMAIL,
+        'password': EIGHT_SLEEP_PASSWORD,
+    }, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    token = data['access_token']
+    user_id = data['userId']
+    expires_in = data.get('expires_in', 86400)
+    _eight_sleep_token['access_token'] = token
+    _eight_sleep_token['user_id'] = user_id
+    _eight_sleep_token['expires'] = time.time() + expires_in
+    return token, user_id
+
+
+def _eight_api(path, token):
+    """Make authenticated GET request to Eight Sleep client API."""
+    resp = req_lib.get(f'{EIGHT_CLIENT_API}{path}', headers={
+        'Authorization': f'Bearer {token}',
+        'User-Agent': 'pyEight/1.0',
+    }, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
 
 @app.route('/eight-sleep/sleep')
 def eight_sleep_sleep():
-    """Fetch last night's sleep data from Eight Sleep Pod via pyEight."""
+    """Fetch last night's sleep data from Eight Sleep Pod via direct API."""
     if not EIGHT_SLEEP_EMAIL or not EIGHT_SLEEP_PASSWORD:
-        return jsonify({'error': 'EIGHT_SLEEP_EMAIL / EIGHT_SLEEP_PASSWORD not configured',
-                        'email_set': bool(EIGHT_SLEEP_EMAIL), 'password_set': bool(EIGHT_SLEEP_PASSWORD)}), 500
+        return jsonify({'error': 'EIGHT_SLEEP_EMAIL / EIGHT_SLEEP_PASSWORD not configured'}), 500
 
     # Cache for 10 minutes
     if _eight_sleep_cache['data'] and (time.time() - _eight_sleep_cache['ts']) < 600:
         return jsonify(_eight_sleep_cache['data'])
 
-    import asyncio
-
-    async def _fetch():
-        from pyeight.eight import EightSleep
-        eight = EightSleep(
-            email=EIGHT_SLEEP_EMAIL,
-            password=EIGHT_SLEEP_PASSWORD,
-            timezone='America/Chicago',
-        )
-        try:
-            await eight.start()
-
-            await eight.update_user_data()
-
-            # Get the first user (usually left or right side)
-            if not eight.users:
-                return {'error': 'No Eight Sleep users found'}
-
-            user = list(eight.users.values())[0]
-
-            # Sleep stage breakdown from current_sleep_breakdown
-            breakdown = user.current_sleep_breakdown or {}
-            deep_secs = breakdown.get('deep', 0) or 0
-            rem_secs = breakdown.get('rem', 0) or 0
-            light_secs = breakdown.get('light', 0) or 0
-            awake_secs = breakdown.get('awake', 0) or 0
-            total_sleep_secs = deep_secs + rem_secs + light_secs
-            total_in_bed_secs = total_sleep_secs + awake_secs
-
-            deep_hrs = round(deep_secs / 3600, 2)
-            rem_hrs = round(rem_secs / 3600, 2)
-            light_hrs = round(light_secs / 3600, 2)
-            awake_hrs = round(awake_secs / 3600, 2)
-            sleep_hours = round(total_sleep_secs / 3600, 1)
-            deep_plus_rem = round((deep_secs + rem_secs) / 3600, 1)
-            in_bed_hours = round(total_in_bed_secs / 3600, 1)
-
-            # Also try time_slept property as fallback for sleep_hours
-            if total_sleep_secs == 0 and user.time_slept:
-                sleep_hours = round(user.time_slept / 3600, 1)
-
-            # Properties exposed directly by lukas-clarke fork
-            heart_rate = user.current_heart_rate
-            hrv_avg = user.current_hrv
-            resp_rate = user.current_breath_rate or user.current_resp_rate
-            sleep_score = user.current_sleep_score
-            bed_temp_c = user.current_bed_temp
-            room_temp_c = user.current_room_temp
-            tnt = user.current_tnt
-            session_date = str(user.current_session_date)[:10] if user.current_session_date else None
-
-            # HR min from timeseries if available
-            hr_min = None
-            try:
-                if hasattr(user, 'intervals') and user.intervals:
-                    ts_data = user.intervals[0].get('timeseries', {})
-                    hr_series = ts_data.get('heartRate', [])
-                    if hr_series:
-                        hr_vals = [v[1] for v in hr_series if v[1] is not None and v[1] > 30]
-                        if hr_vals:
-                            hr_min = round(min(hr_vals))
-            except Exception:
-                pass
-
-            result = {
-                'source': 'eight_sleep',
-                'date': session_date,
-                'sleep_score': sleep_score,
-                'sleep_hours': sleep_hours,
-                'in_bed_hours': in_bed_hours,
-                'deep_hours': deep_hrs,
-                'rem_hours': rem_hrs,
-                'light_hours': light_hrs,
-                'awake_hours': awake_hrs,
-                'deep_plus_rem_hours': deep_plus_rem,
-                'hrv': round(hrv_avg, 1) if hrv_avg is not None else None,
-                'heart_rate_avg': round(heart_rate, 1) if heart_rate is not None else None,
-                'heart_rate_min': hr_min,
-                'respiratory_rate': round(resp_rate, 1) if resp_rate is not None else None,
-                'bed_temp_c': round(bed_temp_c, 1) if bed_temp_c is not None else None,
-                'bed_temp_f': round(bed_temp_c * 9/5 + 32, 1) if bed_temp_c is not None else None,
-                'room_temp_c': round(room_temp_c, 1) if room_temp_c is not None else None,
-                'room_temp_f': round(room_temp_c * 9/5 + 32, 1) if room_temp_c is not None else None,
-                'toss_and_turns': tnt,
-            }
-            return result
-        finally:
-            await eight.stop()
-
     try:
-        loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(_fetch())
-        loop.close()
-        if 'error' in result:
-            return jsonify(result), 500
+        token, user_id = _eight_sleep_auth()
+
+        # Fetch trend data for last 2 days
+        from datetime import datetime as _dt8
+        from zoneinfo import ZoneInfo as _ZI8
+        ct = _dt8.now(_ZI8('America/Chicago'))
+        date_from = (ct - timedelta(days=2)).strftime('%Y-%m-%d')
+        date_to = (ct + timedelta(days=1)).strftime('%Y-%m-%d')
+
+        trends = _eight_api(
+            f'/users/{user_id}/trends?tz=America/Chicago&from={date_from}&to={date_to}'
+            '&include-main=false&include-all-sessions=true&model-version=v2',
+            token
+        )
+
+        # Find most recent completed session from trends
+        days = trends.get('days', []) if isinstance(trends, dict) else trends if isinstance(trends, list) else []
+        session = None
+        for day in sorted(days, key=lambda d: d.get('day', ''), reverse=True):
+            if day.get('score') and not day.get('incomplete', True):
+                session = day
+                break
+        if not session:
+            # Fall back to most recent day with any data
+            for day in sorted(days, key=lambda d: d.get('day', ''), reverse=True):
+                if day.get('sleepDuration') or day.get('score'):
+                    session = day
+                    break
+
+        if not session:
+            return jsonify({'error': 'No recent Eight Sleep session found', 'days_count': len(days)}), 500
+
+        # Extract sleep data from trend session
+        sleep_duration_secs = session.get('sleepDuration', 0) or 0
+        presence_duration_secs = session.get('presenceDuration', 0) or 0
+        sleep_hours = round(sleep_duration_secs / 3600, 1)
+        in_bed_hours = round(presence_duration_secs / 3600, 1) if presence_duration_secs else sleep_hours
+
+        # Sleep stages — trends provide sleepDuration + stage breakdown
+        # Stages may be in 'stages' or computed from intervals
+        deep_pct = session.get('deepPercent', 0) or 0
+        deep_secs = round(sleep_duration_secs * deep_pct)
+        # Trends don't always have rem/light breakdown separately
+        # Try to get from timeseries/stages if available
+        stages = session.get('stages', {}) or {}
+        rem_secs = stages.get('rem', 0) or 0
+        light_secs = stages.get('light', 0) or 0
+        awake_secs = stages.get('awake', 0) or 0
+        if not stages:
+            # Estimate: typical sleep is ~20% REM, remaining is light
+            rem_secs = round(sleep_duration_secs * 0.20) if deep_pct > 0 else 0
+            light_secs = max(0, sleep_duration_secs - deep_secs - rem_secs) if deep_pct > 0 else 0
+
+        deep_hrs = round(deep_secs / 3600, 2)
+        rem_hrs = round(rem_secs / 3600, 2)
+        light_hrs = round(light_secs / 3600, 2)
+        awake_hrs = round(awake_secs / 3600, 2)
+        deep_plus_rem = round((deep_secs + rem_secs) / 3600, 1)
+
+        sleep_score = session.get('score')
+
+        # Fetch intervals for timeseries data (HR, HRV, respiratory rate, bed temp)
+        hrv_avg = None
+        hr_avg = None
+        hr_min = None
+        resp_rate = None
+        bed_temp_c = None
+        room_temp_c = None
+        tnt = session.get('tnt')
+
+        try:
+            intervals = _eight_api(
+                f'/users/{user_id}/intervals?tz=America/Chicago&from={date_from}&to={date_to}',
+                token
+            )
+            interval_list = intervals.get('intervals', []) if isinstance(intervals, dict) else intervals if isinstance(intervals, list) else []
+            # Find matching interval for our session date
+            for intv in sorted(interval_list, key=lambda i: i.get('ts', ''), reverse=True):
+                ts_data = intv.get('timeseries', {})
+
+                # HRV
+                hrv_series = ts_data.get('hrv', [])
+                if hrv_series:
+                    hrv_vals = [v[1] for v in hrv_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None and v[1] > 0]
+                    if hrv_vals:
+                        hrv_avg = round(sum(hrv_vals) / len(hrv_vals), 1)
+
+                # Heart rate
+                hr_series = ts_data.get('heartRate', [])
+                if hr_series:
+                    hr_vals = [v[1] for v in hr_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None and v[1] > 30]
+                    if hr_vals:
+                        hr_avg = round(sum(hr_vals) / len(hr_vals), 1)
+                        hr_min = round(min(hr_vals))
+
+                # Respiratory rate
+                rr_series = ts_data.get('respiratoryRate', [])
+                if rr_series:
+                    rr_vals = [v[1] for v in rr_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None and v[1] > 0]
+                    if rr_vals:
+                        resp_rate = round(sum(rr_vals) / len(rr_vals), 1)
+
+                # Bed temp
+                bt_series = ts_data.get('tempBedC', [])
+                if bt_series:
+                    bt_vals = [v[1] for v in bt_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None]
+                    if bt_vals:
+                        bed_temp_c = round(sum(bt_vals) / len(bt_vals), 1)
+
+                # Room temp
+                rt_series = ts_data.get('tempRoomC', [])
+                if rt_series:
+                    rt_vals = [v[1] for v in rt_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None]
+                    if rt_vals:
+                        room_temp_c = round(sum(rt_vals) / len(rt_vals), 1)
+
+                # Toss & turns from interval if not in trends
+                if tnt is None:
+                    tnt_events = ts_data.get('tnt', [])
+                    if tnt_events:
+                        tnt = len(tnt_events)
+
+                # Use stages from interval breakdown if trends didn't have them
+                if not stages:
+                    intv_stages = intv.get('stages', {}) or {}
+                    if intv_stages:
+                        deep_secs = intv_stages.get('deep', 0) or 0
+                        rem_secs = intv_stages.get('rem', 0) or 0
+                        light_secs = intv_stages.get('light', 0) or 0
+                        awake_secs = intv_stages.get('awake', 0) or 0
+                        deep_hrs = round(deep_secs / 3600, 2)
+                        rem_hrs = round(rem_secs / 3600, 2)
+                        light_hrs = round(light_secs / 3600, 2)
+                        awake_hrs = round(awake_secs / 3600, 2)
+                        deep_plus_rem = round((deep_secs + rem_secs) / 3600, 1)
+
+                break  # Use the first (most recent) interval
+        except Exception as e:
+            pass  # Intervals are bonus data — trends are sufficient
+
+        session_date = session.get('day')
+
+        result = {
+            'source': 'eight_sleep',
+            'date': session_date,
+            'sleep_score': sleep_score,
+            'sleep_hours': sleep_hours,
+            'in_bed_hours': in_bed_hours,
+            'deep_hours': deep_hrs,
+            'rem_hours': rem_hrs,
+            'light_hours': light_hrs,
+            'awake_hours': awake_hrs,
+            'deep_plus_rem_hours': deep_plus_rem,
+            'hrv': hrv_avg,
+            'heart_rate_avg': hr_avg,
+            'heart_rate_min': hr_min,
+            'respiratory_rate': resp_rate,
+            'bed_temp_c': bed_temp_c,
+            'bed_temp_f': round(bed_temp_c * 9/5 + 32, 1) if bed_temp_c is not None else None,
+            'room_temp_c': room_temp_c,
+            'room_temp_f': round(room_temp_c * 9/5 + 32, 1) if room_temp_c is not None else None,
+            'toss_and_turns': tnt,
+        }
+
         _eight_sleep_cache['data'] = result
         _eight_sleep_cache['ts'] = time.time()
         return jsonify(result)
+
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
