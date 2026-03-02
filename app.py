@@ -792,11 +792,22 @@ def health():
 def garmin_sleep():
     try:
         client = get_client()
-        today = date.today().isoformat()
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        ct_now = datetime.now(ZoneInfo('America/Chicago'))
+        today = ct_now.strftime('%Y-%m-%d')
         sleep = client.connectapi('/wellness-service/wellness/dailySleepData/' + GARMIN_EMAIL + '?date=' + today + '&nonSleepBufferMinutes=60')
         sleep_data = sleep.get('dailySleepDTO', {})
         sleep_score = sleep_data.get('sleepScores', {}).get('overall', {}).get('value', None)
         sleep_seconds = sleep_data.get('sleepTimeSeconds', 0)
+        # Fallback: if today has no data, try yesterday (sleep data is for the prior night)
+        if not sleep_score and not sleep_seconds:
+            yesterday = (ct_now - timedelta(days=1)).strftime('%Y-%m-%d')
+            sleep = client.connectapi('/wellness-service/wellness/dailySleepData/' + GARMIN_EMAIL + '?date=' + yesterday + '&nonSleepBufferMinutes=60')
+            sleep_data = sleep.get('dailySleepDTO', {})
+            sleep_score = sleep_data.get('sleepScores', {}).get('overall', {}).get('value', None)
+            sleep_seconds = sleep_data.get('sleepTimeSeconds', 0)
+            today = yesterday  # report the date we actually got data for
         sleep_hours = round(sleep_seconds / 3600, 1) if sleep_seconds else None
         deep_secs  = sleep_data.get('deepSleepSeconds',  0) or 0
         light_secs = sleep_data.get('lightSleepSeconds', 0) or 0
