@@ -1042,7 +1042,7 @@ RUN:
 
 SWIM:
 - Pool access 1 hour max. Warmup + drills <= 10 min. Maximize main set water time.
-- No pool access Sunday. Never schedule swimming on Sunday.
+- No pool access Sunday. Never schedule swimming on Sunday. CRITICAL: Do NOT flag "low swim volume" on Monday morning when Sunday was a no-pool day — that's expected. Only flag swim deficits based on Mon-Sat availability (max 6 swim days/week, target ~3 sessions/week).
 - 25-yard pool. All programming in yards.
 
 STRENGTH:
@@ -1082,7 +1082,7 @@ PERIODIZATION & RACE CALENDAR (MANDATORY — check before EVERY recommendation):
 YOU MUST CHECK THIS CALENDAR before recommending any peak session or Big Day. If today is before Mar 15, the athlete is tapering into Dallas 70.3 — do NOT recommend peak efforts this week.
 
 CRITICAL ANALYSIS RULES:
-1. You will receive BOTH today's brief AND a full week activity log. ALWAYS check the full week log before claiming something "hasn't been done." Many training elements (bricks, race nutrition, progressive power) happen on specific days, not every day.
+1. You will receive BOTH today's brief AND a full week activity log. ALWAYS check the full week log before claiming something "hasn't been done." Many training elements (bricks, race nutrition, progressive power) happen on specific days, not every day. Brick runs are labeled "(BRICK)" in the activity log — search for this tag before claiming "no bricks."
 2. Distinguish between "not done today" and "not done this week." Only flag something as missing if it's absent from the ENTIRE week (or multiple weeks in trend data).
 3. You will receive a RACE CALENDAR with exact dates. NEVER recommend scheduling peak sessions, Big Days, or high-volume work that conflicts with taper windows or recovery periods. Check the calendar before every recommendation.
 4. Respect athlete constraints: this athlete NEVER takes rest days. NEVER recommend "rest days", "recovery days", or "days off." If recovery is needed, recommend easier doubles (easy spin + drill swim). This is non-negotiable.
