@@ -1175,7 +1175,7 @@ def coaching_audit():
 
 
 # ── Training Plan & Trends Storage ────────────────────────────
-JSONBIN_PLAN_BIN_ID = os.environ.get('JSONBIN_PLAN_BIN_ID')
+JSONBIN_PLAN_BIN_ID = os.environ.get('JSONBIN_PLAN_BIN_ID', '69a4ea1c43b1c97be9aa9007')
 
 @app.route('/setup/create-plan-bin', methods=['POST'])
 def create_plan_bin():
