@@ -1409,6 +1409,16 @@ def garmin_activities():
                                       'waterEstimated', 'waterConsumed', 'beginStamina', 'endStamina'):
                             if not enriched.get(field):
                                 enriched[field] = summary.get(field) or detail.get(field)
+                        # Stamina may also be in connectIQMeasurements or different nested paths
+                        if not enriched.get('beginStamina'):
+                            for src in (detail.get('connectIQMeasurement', {}), detail.get('connectIQItemDTO', {})):
+                                if isinstance(src, dict):
+                                    bs = src.get('beginStamina') or src.get('startStamina')
+                                    es = src.get('endStamina') or src.get('finishStamina')
+                                    if bs is not None:
+                                        enriched['beginStamina'] = bs
+                                        enriched['endStamina'] = es
+                                        break
                         # Estimate sweat if unavailable
                         if not enriched.get('waterEstimated') and not enriched.get('waterConsumed'):
                             avg_temp = enriched.get('averageTemperature')
@@ -1451,6 +1461,42 @@ def garmin_activities():
                         lap_data['avgTemperature'] = lap.get('averageTemperature') or lap.get('avgTemperature')
                     laps.append(lap_data)
                 enriched['laps'] = laps
+
+                # Fetch per-lap run dynamics from activity details (VO, GCB not in splits)
+                if type_key in ('running', 'trail_running', 'treadmill_running') and laps:
+                    try:
+                        details = client.connectapi(f'/activity-service/activity/{aid}/details?maxChartSize=1000&maxPolylineSize=1000')
+                        metrics_by_lap = {}
+                        for metric in (details.get('metricDescriptors', []) if isinstance(details, dict) else []):
+                            key = metric.get('key', '')
+                            idx = metric.get('metricsIndex')
+                            if key in ('directVerticalOscillation', 'directGroundContactBalance', 'directGroundContactTime') and idx is not None:
+                                metrics_by_lap[key] = idx
+                        if metrics_by_lap:
+                            activity_metrics = details.get('activityDetailMetrics', []) if isinstance(details, dict) else []
+                            # Group metrics by lap index
+                            for lap_obj in laps:
+                                li = lap_obj.get('lapIndex', 0)
+                                lap_metrics = [m for m in activity_metrics if m.get('lapIndex') == li]
+                                if lap_metrics:
+                                    metrx = [m.get('metrics', []) for m in lap_metrics]
+                                    vo_idx = metrics_by_lap.get('directVerticalOscillation')
+                                    gcb_idx = metrics_by_lap.get('directGroundContactBalance')
+                                    gct_idx = metrics_by_lap.get('directGroundContactTime')
+                                    if vo_idx is not None:
+                                        vals = [mx[vo_idx] for mx in metrx if len(mx) > vo_idx and mx[vo_idx] is not None and mx[vo_idx] > 0]
+                                        if vals:
+                                            lap_obj['avgVerticalOscillation'] = round(sum(vals) / len(vals), 2)
+                                    if gcb_idx is not None:
+                                        vals = [mx[gcb_idx] for mx in metrx if len(mx) > gcb_idx and mx[gcb_idx] is not None and mx[gcb_idx] > 0]
+                                        if vals:
+                                            lap_obj['avgGroundContactBalance'] = round(sum(vals) / len(vals), 2)
+                                    if gct_idx is not None:
+                                        vals = [mx[gct_idx] for mx in metrx if len(mx) > gct_idx and mx[gct_idx] is not None and mx[gct_idx] > 0]
+                                        if vals:
+                                            lap_obj['avgGroundContactTime'] = round(sum(vals) / len(vals), 2)
+                    except Exception:
+                        pass  # Details endpoint optional — laps still work without it
 
                 # Calculate GAP (Grade Adjusted Pace) for runs with elevation
                 if type_key in ('running', 'trail_running', 'treadmill_running') and laps:
