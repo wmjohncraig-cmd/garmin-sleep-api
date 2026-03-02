@@ -1171,9 +1171,21 @@ RUN:
 - Bent knee calf raises 3x15 pre-run = Achilles/soleus prehab. Non-negotiable.
 
 SWIM:
-- Pool access 1 hour max. Warmup + drills <= 10 min. Maximize main set water time.
-- No pool access Sunday. Never schedule swimming on Sunday. CRITICAL: Do NOT flag "low swim volume" on Monday morning when Sunday was a no-pool day — that's expected. Only flag swim deficits based on Mon-Sat availability (max 6 swim days/week, target ~3 sessions/week).
-- 25-yard pool. All programming in yards.
+- CSS: 2:10/100yd. All paces programmed off this.
+- Zones: Easy/Recovery 2:35-2:50, Aerobic/IM race pace 2:20-2:35, Threshold 2:10, VO2 1:55-2:05, Sprint <1:55
+- Dallas 70.3 swim target: 2:10-2:15/100yd (full send at CSS)
+- Ironman race pace target: 2:20-2:25/100yd
+- 4 sessions/week: Mon/Tue/Thu/Fri. NO Sunday (no pool access).
+- Mon = Threshold (16x100 @ 2:10, 10s rest)
+- Tue = VO2 + Speed (50s @ 1:55, 100s @ 2:05)
+- Thu = Race Sim 400s (6-8x400 @ 2:15, 15s rest, build to 10x400)
+- Fri = Endurance negative split (3x800 @ 2:25, last 200 drop to 2:10)
+- Weekly target: 9,200-11,000yd
+- 25yd pool, 1hr max, 10min warmup cap
+- PHILOSOPHY: Every session has structure and purpose. No junk continuous yardage. 90% of training = 100-400yd intervals. Continuous swimming is ONLY for recovery days (aerobic 2:25-2:35) or race simulation (2x1800 at race pace).
+- His default pace is 2:09 (threshold). If swimming "easy" he must deliberately slow to 2:25+. Otherwise every session becomes accidental CSS work.
+- CRITICAL: A 3-day gap over a no-pool-Sunday weekend (last swim Friday, next swim Monday) is NORMAL, not a red flag. Do not flag swim frequency as low unless he misses a weekday session.
+- Athlete has huge untapped swim speed — 70.3 was 2:30 pace at RPE 6.
 
 STRENGTH:
 - Currently transitioning from max strength (3x5 heavy) to muscular endurance (3x15-20, slow eccentrics, lighter load)
