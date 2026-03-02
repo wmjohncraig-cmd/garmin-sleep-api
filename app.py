@@ -13,6 +13,9 @@ _client = None
 
 VESYNC_EMAIL = os.environ.get('VESYNC_EMAIL')
 VESYNC_PASSWORD = os.environ.get('VESYNC_PASSWORD')
+
+EIGHT_SLEEP_EMAIL = os.environ.get('EIGHT_SLEEP_EMAIL')
+EIGHT_SLEEP_PASSWORD = os.environ.get('EIGHT_SLEEP_PASSWORD')
 VESYNC_BASE = 'https://smartapi.vesync.com'
 
 MANUAL_WEIGHT_LBS = os.environ.get('MANUAL_WEIGHT_LBS')
@@ -787,6 +790,133 @@ def health():
         'nutrition_entries_today': nutrition_entries,
         'date': today_key,
     })
+
+_eight_sleep_cache = {'data': None, 'ts': 0}
+
+@app.route('/eight-sleep/sleep')
+def eight_sleep_sleep():
+    """Fetch last night's sleep data from Eight Sleep Pod via pyEight."""
+    if not EIGHT_SLEEP_EMAIL or not EIGHT_SLEEP_PASSWORD:
+        return jsonify({'error': 'EIGHT_SLEEP_EMAIL / EIGHT_SLEEP_PASSWORD not configured'}), 500
+
+    # Cache for 10 minutes
+    if _eight_sleep_cache['data'] and (time.time() - _eight_sleep_cache['ts']) < 600:
+        return jsonify(_eight_sleep_cache['data'])
+
+    import asyncio
+
+    async def _fetch():
+        from pyeight.eight import EightSleep
+        eight = EightSleep(
+            email=EIGHT_SLEEP_EMAIL,
+            password=EIGHT_SLEEP_PASSWORD,
+            timezone='America/Chicago',
+        )
+        try:
+            success = await eight.start()
+            if not success:
+                return {'error': 'Eight Sleep authentication failed'}
+
+            await eight.update_user_data()
+
+            # Get the first user (usually left or right side)
+            if not eight.users:
+                return {'error': 'No Eight Sleep users found'}
+
+            user = list(eight.users.values())[0]
+            vals = user.current_values or {}
+            breakdown = vals.get('breakdown', {}) or {}
+
+            # Sleep stage durations (seconds → hours)
+            deep_secs = breakdown.get('deep', 0) or 0
+            rem_secs = breakdown.get('rem', 0) or 0
+            light_secs = breakdown.get('light', 0) or 0
+            awake_secs = breakdown.get('awake', 0) or 0
+            total_sleep_secs = deep_secs + rem_secs + light_secs
+            total_in_bed_secs = total_sleep_secs + awake_secs
+
+            deep_hrs = round(deep_secs / 3600, 2)
+            rem_hrs = round(rem_secs / 3600, 2)
+            light_hrs = round(light_secs / 3600, 2)
+            awake_hrs = round(awake_secs / 3600, 2)
+            sleep_hours = round(total_sleep_secs / 3600, 1)
+            deep_plus_rem = round((deep_secs + rem_secs) / 3600, 1)
+            in_bed_hours = round(total_in_bed_secs / 3600, 1)
+
+            # HR and respiratory rate from current values
+            heart_rate = vals.get('heart_rate')
+            resp_rate = vals.get('resp_rate')
+            sleep_score = vals.get('score')
+            bed_temp_c = vals.get('bed_temp')
+            room_temp_c = vals.get('room_temp')
+            tnt = vals.get('tnt')
+            session_date = str(vals.get('date', ''))[:10] if vals.get('date') else None
+
+            # HRV — not exposed as a property, dig into raw intervals
+            hrv_avg = None
+            try:
+                intervals = user.intervals
+                if intervals and len(intervals) > 0:
+                    ts_data = intervals[0].get('timeseries', {})
+                    hrv_series = ts_data.get('hrv', [])
+                    if hrv_series:
+                        hrv_vals = [v[1] for v in hrv_series if v[1] is not None and v[1] > 0]
+                        if hrv_vals:
+                            hrv_avg = round(sum(hrv_vals) / len(hrv_vals), 1)
+            except Exception:
+                pass
+
+            # HR min during sleep — from timeseries
+            hr_min = None
+            try:
+                intervals = user.intervals
+                if intervals and len(intervals) > 0:
+                    ts_data = intervals[0].get('timeseries', {})
+                    hr_series = ts_data.get('heartRate', [])
+                    if hr_series:
+                        hr_vals = [v[1] for v in hr_series if v[1] is not None and v[1] > 30]
+                        if hr_vals:
+                            hr_min = round(min(hr_vals))
+            except Exception:
+                pass
+
+            result = {
+                'source': 'eight_sleep',
+                'date': session_date,
+                'sleep_score': sleep_score,
+                'sleep_hours': sleep_hours,
+                'in_bed_hours': in_bed_hours,
+                'deep_hours': deep_hrs,
+                'rem_hours': rem_hrs,
+                'light_hours': light_hrs,
+                'awake_hours': awake_hrs,
+                'deep_plus_rem_hours': deep_plus_rem,
+                'hrv': hrv_avg,
+                'heart_rate_avg': heart_rate,
+                'heart_rate_min': hr_min,
+                'respiratory_rate': resp_rate,
+                'bed_temp_c': round(bed_temp_c, 1) if bed_temp_c is not None else None,
+                'bed_temp_f': round(bed_temp_c * 9/5 + 32, 1) if bed_temp_c is not None else None,
+                'room_temp_c': round(room_temp_c, 1) if room_temp_c is not None else None,
+                'room_temp_f': round(room_temp_c * 9/5 + 32, 1) if room_temp_c is not None else None,
+                'toss_and_turns': tnt,
+            }
+            return result
+        finally:
+            await eight.stop()
+
+    try:
+        loop = asyncio.new_event_loop()
+        result = loop.run_until_complete(_fetch())
+        loop.close()
+        if 'error' in result:
+            return jsonify(result), 500
+        _eight_sleep_cache['data'] = result
+        _eight_sleep_cache['ts'] = time.time()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/garmin-sleep')
 def garmin_sleep():

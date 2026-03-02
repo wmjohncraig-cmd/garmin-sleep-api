@@ -20,7 +20,21 @@ Ironman Texas training dashboard with two deployment targets:
 
 ## Data Pipelines (End-to-End)
 
-### 1. Garmin Sleep/HRV
+### 1a. Eight Sleep (Primary Sleep Source)
+```
+Eight Sleep Pod → pyEight library (email/pw auth) → /eight-sleep/sleep endpoint → Dashboard
+```
+- **Source**: Eight Sleep client API via `pyeight` Python library (async, wrapped in asyncio.run)
+- **Auth**: `EIGHT_SLEEP_EMAIL`, `EIGHT_SLEEP_PASSWORD` env vars on Render
+- **Server endpoint**: `GET /eight-sleep/sleep`
+- **Server cache**: In-memory, 10-min TTL (`_eight_sleep_cache`)
+- **Dashboard cache**: `imtx_eight_sleep` (localStorage, 10-min TTL)
+- **Fields**: sleep_score, sleep_hours, in_bed_hours, deep/rem/light/awake_hours, deep_plus_rem_hours, hrv, heart_rate_avg/min, respiratory_rate, bed_temp, room_temp, toss_and_turns
+- **Thresholds**: Deep+REM < 2.5h = WARNING, 2.5-3.5h = GOOD, 3.5h+ = OPTIMAL
+- **Fallback**: If Eight Sleep API fails, dashboard falls back to Garmin sleep data with "(Garmin fallback)" label
+- **No persistent storage** — fetched live each request
+
+### 1b. Garmin Sleep/HRV (Fallback + Body Battery)
 ```
 Garmin Connect → garth library (email/pw auth) → /garmin-sleep endpoint → Dashboard
 ```
@@ -29,6 +43,7 @@ Garmin Connect → garth library (email/pw auth) → /garmin-sleep endpoint → 
 - **Server endpoint**: `GET /garmin-sleep`
 - **Dashboard cache**: `imtx_garmin` (localStorage, 10-min TTL)
 - **Fields**: body_battery, hrv, sleep_score, sleep_hours, readiness, deep_plus_rem_hours
+- **Role**: Always fetched for body_battery (not available from Eight Sleep). Falls back to full sleep source if Eight Sleep unavailable.
 - **No persistent storage** — fetched live each request
 
 ### 2. Garmin Activities
@@ -121,7 +136,8 @@ All API calls use `resilientFetch()` which:
 
 | Cache Key | TTL | Data |
 |-----------|-----|------|
-| `imtx_garmin` | 10 min | Sleep/HRV metrics |
+| `imtx_eight_sleep` | 10 min | Eight Sleep sleep data |
+| `imtx_garmin` | 10 min | Garmin sleep/body battery |
 | `imtx_nutrition_cache` | 30 min | Today's nutrition |
 | `imtx_withings_weight` | 1 hr | Current weight/body comp |
 | `imtx_weight_history` | 1 hr | Historical weights |
@@ -146,6 +162,8 @@ All API calls use `resilientFetch()` which:
 | `WITHINGS_TOKEN` | Fallback token (JSON string) |
 | `NUTRITION_API_KEY` | Auth for `/log-nutrition` |
 | `ANTHROPIC_API_KEY` | Claude API for coaching |
+| `EIGHT_SLEEP_EMAIL` | Eight Sleep account login |
+| `EIGHT_SLEEP_PASSWORD` | Eight Sleep account password |
 | `VESYNC_EMAIL` | VeSync scale (inactive) |
 | `VESYNC_PASSWORD` | VeSync scale (inactive) |
 | `PORT` | Server port (default 5000) |
