@@ -256,12 +256,8 @@ def _load_withings_token():
     # 2. JSONBin (persistent across restarts)
     if JSONBIN_API_KEY and JSONBIN_WITHINGS_BIN_ID:
         try:
-            r = req_lib.get(
-                f'https://api.jsonbin.io/v3/b/{JSONBIN_WITHINGS_BIN_ID}/latest',
-                headers={'X-Master-Key': JSONBIN_API_KEY},
-                timeout=10,
-            )
-            if r.ok:
+            r = _jsonbin_request('GET', JSONBIN_WITHINGS_BIN_ID)
+            if r and r.ok:
                 data = r.json().get('record', {})
                 if data.get('access_token'):
                     _withings_token_cache = data
@@ -284,12 +280,7 @@ def _save_withings_token(data):
     # Persist to JSONBin
     if JSONBIN_API_KEY and JSONBIN_WITHINGS_BIN_ID:
         try:
-            req_lib.put(
-                f'https://api.jsonbin.io/v3/b/{JSONBIN_WITHINGS_BIN_ID}',
-                headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
-                json=data,
-                timeout=10,
-            )
+            _jsonbin_request('PUT', JSONBIN_WITHINGS_BIN_ID, data)
         except Exception:
             pass
 
@@ -480,39 +471,67 @@ def withings_weight():
 
 
 _nutrition_cache = None
+_nutrition_cache_ts = 0  # epoch seconds when cache was last refreshed from JSONBin
+
+def _jsonbin_request(method, bin_id, data=None, retries=2):
+    """JSONBin API wrapper with retry logic."""
+    url = f'https://api.jsonbin.io/v3/b/{bin_id}'
+    if method == 'GET':
+        url += '/latest'
+    headers = {'X-Master-Key': JSONBIN_API_KEY}
+    if data is not None:
+        headers['Content-Type'] = 'application/json'
+    for attempt in range(retries + 1):
+        try:
+            if method == 'GET':
+                r = req_lib.get(url, headers=headers, timeout=12)
+            else:
+                r = req_lib.put(url, headers=headers, json=data, timeout=12)
+            if r.ok:
+                return r
+            if r.status_code == 429 and attempt < retries:
+                time.sleep(1 * (attempt + 1))
+                continue
+            if r.status_code >= 500 and attempt < retries:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return r
+        except Exception:
+            if attempt < retries:
+                time.sleep(2)
+                continue
+            raise
+    return None
 
 def _load_nutrition_log():
-    global _nutrition_cache
-    if _nutrition_cache is not None:
+    global _nutrition_cache, _nutrition_cache_ts
+    # Serve from memory if fresh (< 60s old)
+    if _nutrition_cache is not None and (time.time() - _nutrition_cache_ts) < 60:
         return _nutrition_cache
     # Load from JSONBin (persistent across Render restarts)
     if JSONBIN_API_KEY and JSONBIN_BIN_ID:
         try:
-            r = req_lib.get(
-                f'https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest',
-                headers={'X-Master-Key': JSONBIN_API_KEY},
-                timeout=10,
-            )
-            if r.ok:
+            r = _jsonbin_request('GET', JSONBIN_BIN_ID)
+            if r and r.ok:
                 _nutrition_cache = r.json().get('record', {})
+                _nutrition_cache_ts = time.time()
                 return _nutrition_cache
         except Exception:
             pass
+    # Fallback: return stale cache if available, otherwise empty
+    if _nutrition_cache is not None:
+        return _nutrition_cache
     _nutrition_cache = {}
     return _nutrition_cache
 
 def _save_nutrition_log(data):
-    global _nutrition_cache
+    global _nutrition_cache, _nutrition_cache_ts
     _nutrition_cache = data
+    _nutrition_cache_ts = time.time()
     # Persist to JSONBin
     if JSONBIN_API_KEY and JSONBIN_BIN_ID:
         try:
-            req_lib.put(
-                f'https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}',
-                headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
-                json=data,
-                timeout=10,
-            )
+            _jsonbin_request('PUT', JSONBIN_BIN_ID, data)
         except Exception:
             pass
 
@@ -563,10 +582,15 @@ def nutrition_clear():
 
 @app.route('/nutrition/today')
 def nutrition_today():
+    global _nutrition_cache, _nutrition_cache_ts
     from datetime import datetime
     from zoneinfo import ZoneInfo
     ct = datetime.now(ZoneInfo('America/Chicago'))
     today_key = ct.strftime('%Y-%m-%d')
+    # Allow ?refresh=1 to bypass in-memory cache
+    if request.args.get('refresh'):
+        _nutrition_cache = None
+        _nutrition_cache_ts = 0
     log = _load_nutrition_log()
     all_entries = log.get(today_key, [])
     entries = [e for e in all_entries if not e.get('_meta')]
@@ -652,12 +676,8 @@ def _load_strength_log():
         return _strength_cache
     if JSONBIN_API_KEY and JSONBIN_STRENGTH_BIN_ID:
         try:
-            r = req_lib.get(
-                f'https://api.jsonbin.io/v3/b/{JSONBIN_STRENGTH_BIN_ID}/latest',
-                headers={'X-Master-Key': JSONBIN_API_KEY},
-                timeout=10,
-            )
-            if r.ok:
+            r = _jsonbin_request('GET', JSONBIN_STRENGTH_BIN_ID)
+            if r and r.ok:
                 _strength_cache = r.json().get('record', {})
                 return _strength_cache
         except Exception:
@@ -670,12 +690,7 @@ def _save_strength_log(data):
     _strength_cache = data
     if JSONBIN_API_KEY and JSONBIN_STRENGTH_BIN_ID:
         try:
-            req_lib.put(
-                f'https://api.jsonbin.io/v3/b/{JSONBIN_STRENGTH_BIN_ID}',
-                headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json'},
-                json=data,
-                timeout=10,
-            )
+            _jsonbin_request('PUT', JSONBIN_STRENGTH_BIN_ID, data)
         except Exception:
             pass
 
@@ -752,11 +767,25 @@ def health():
     except Exception:
         pass
     jsonbin_ok = bool(JSONBIN_API_KEY and JSONBIN_BIN_ID)
+    # Nutrition status
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ct = datetime.now(ZoneInfo('America/Chicago'))
+    today_key = ct.strftime('%Y-%m-%d')
+    nutrition_entries = 0
+    try:
+        log = _load_nutrition_log()
+        all_entries = log.get(today_key, [])
+        nutrition_entries = len([e for e in all_entries if not e.get('_meta')])
+    except Exception:
+        pass
     return jsonify({
         'status': 'ok',
         'garmin_auth': garmin_ok,
         'withings_auth': withings_ok,
-        'jsonbin': jsonbin_ok
+        'jsonbin': jsonbin_ok,
+        'nutrition_entries_today': nutrition_entries,
+        'date': today_key,
     })
 
 @app.route('/garmin-sleep')
