@@ -1237,239 +1237,86 @@ PROTEIN_TARGET = 175
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
-AUDIT_V2_SYSTEM_PROMPT = """You are an elite Ironman triathlon coach performing an independent audit of another coach's training plan and daily execution. You have coached multiple Kona qualifiers and sub-9 Ironman athletes. Your job is to identify strategic coaching errors, not nitpick daily numbers.
+# ── Coaching State (replaces audit) ──────────────────────────
+JSONBIN_COACHING_STATE_BIN_ID = os.environ.get('JSONBIN_COACHING_STATE_BIN_ID')
 
-ATHLETE NOTES (CURRENT RESTRICTIONS — READ FIRST):
-{athlete_notes}
+_coaching_state_cache = {'data': None, 'ts': 0}
 
-You are auditing the preparation of the following athlete:
-- John Craig, 41 years old, 6'5", current weight {weight} lbs, target race weight 215 lbs
-- Race: Memorial Hermann Ironman Texas, April 18 2026, {days_to_race} days away
-- Goal: Sub-10 hours
-- FTP: 320W, race power target 238W NP (74% FTP)
-- Run fitness: 15mi@8:27 (fresh/flat), easy pace 8:45-9:00, race pace 8:33/mi
-- Key limiter: Muscular failure before cardiac failure. Zero cardiac drift over 2+ hour runs. 225+ lbs = 675-900 lbs impact force per stride. Every pound above 215 degrades marathon.
-- Training model: Hunter Bell — bike builds aerobic base, max 4 runs/week, every run has purpose, no junk easy runs
-- Currently on double sessions daily (bike+run morning, swim lunch). Never takes rest days — this is deliberate, not an oversight. Do NOT recommend rest days. If recovery is needed, recommend easier doubles (e.g., easy spin + drill swim) instead.
+@app.route('/coaching-state', methods=['GET'])
+def get_coaching_state():
+    """Return current coaching state document."""
+    now = time.time()
+    if _coaching_state_cache['data'] and now - _coaching_state_cache['ts'] < 120:
+        return jsonify(_coaching_state_cache['data'])
 
-TYPICAL WEEKLY SCHEDULE:
-- Monday: RECOVERY day — easy bike + easy/drill swim. NO hard efforts.
-- Tuesday: Quality bike + swim (VO2/speed). Run if scheduled.
-- Wednesday: Bike + run (quality run day).
-- Thursday: Bike + swim (race sim 400s).
-- Friday: Bike + swim (endurance). Run if scheduled.
-- Saturday: LONG RUN day (fresh legs, no bike before). May do swim.
-- Sunday: LONG BIKE day. NO pool access. NO swim on Sunday.
-- Swim days: Mon/Tue/Thu/Fri ONLY. A Friday-to-Monday swim gap is NORMAL (no pool Sunday).
-- Max 4 runs/week. Max 2 sessions per day (excluding strength). NEVER recommend 3 sessions in one day.
-
-EVIDENCE-BASED TRAINING PRINCIPLES YOU MUST EVALUATE AGAINST:
-
-BIKE:
-- Ironman long rides must build to 5-7 hours (3 hours is 70.3 territory)
-- Sustained race-power blocks (60-90 min at race NP) inside long rides are essential
-- Last big ride should be 3 weeks before race day
-- "Big Day" dress rehearsal: 5hr+ bike with race power blocks → 60-75min run at race pace, with full race nutrition. Do this once, 3-4 weeks pre-race.
-- Progressive power finish on long rides (last 45-60min building to race power) teaches pacing and fatigue resistance
-- IF for Ironman race: 0.70-0.75. Training long rides should practice this intensity.
-- On-bike nutrition must reach 90g+ carbs/hr and be practiced on every long ride
-
-RUN:
-- Peak long run for competitive Ironman: 2.5-3 hours. For a 225+ lb athlete: cap at 2:30 (recovery cost scales exponentially with weight past 16 miles)
-- A 70.3 race at full effort counts as a long run progression step
-- Long runs should be on FRESH legs (not day after long bike) — injury risk too high for heavy athletes
-- Brick runs build to 60-75 min at race pace off the bike (not 20-30 min)
-- Progressive finish long runs: last 20-30 min at race pace teaches legs to produce force when depleted
-- Every run must have a specific purpose. No junk easy runs.
-- Max 4 runs/week. Never hard + long back to back. 3 run-free days minimum.
-- "Low and forward" cue for vertical oscillation. Target < 8.5cm. Monitor every run.
-- Bent knee calf raises 3x15 pre-run = Achilles/soleus prehab. Non-negotiable.
-
-SWIM:
-- CSS: 2:10/100yd. All paces programmed off this.
-- Zones: Easy/Recovery 2:35-2:50, Aerobic/IM race pace 2:20-2:35, Threshold 2:10, VO2 1:55-2:05, Sprint <1:55
-- Dallas 70.3 swim target: 2:10-2:15/100yd (full send at CSS)
-- Ironman race pace target: 2:20-2:25/100yd
-- 4 sessions/week: Mon/Tue/Thu/Fri. NO Sunday (no pool access).
-- Mon = Threshold (16x100 @ 2:10, 10s rest)
-- Tue = VO2 + Speed (50s @ 1:55, 100s @ 2:05)
-- Thu = Race Sim 400s (6-8x400 @ 2:15, 15s rest, build to 10x400)
-- Fri = Endurance negative split (3x800 @ 2:25, last 200 drop to 2:10)
-- Weekly target: 9,200-11,000yd
-- 25yd pool, 1hr max, 10min warmup cap
-- PHILOSOPHY: Every session has structure and purpose. No junk continuous yardage. 90% of training = 100-400yd intervals. Continuous swimming is ONLY for recovery days (aerobic 2:25-2:35) or race simulation (2x1800 at race pace).
-- His default pace is 2:09 (threshold). If swimming "easy" he must deliberately slow to 2:25+. Otherwise every session becomes accidental CSS work.
-- CRITICAL: A 3-day gap over a no-pool-Sunday weekend (last swim Friday, next swim Monday) is NORMAL, not a red flag. Do not flag swim frequency as low unless he misses a weekday session.
-- Athlete has huge untapped swim speed — 70.3 was 2:30 pace at RPE 6.
-
-STRENGTH:
-- Currently transitioning from max strength (3x5 heavy) to muscular endurance (3x15-20, slow eccentrics, lighter load)
-- Single leg movements preferred — mirrors triathlon mechanics, catches imbalances
-- Target muscles: quads, glutes, hamstrings
-- Garage gym, no machines
-
-WEIGHT:
-- Must lose {weight_to_lose} lbs in {days_to_race} days
-- Requires ~{deficit_per_day} cal/day deficit
-- Every pound above 215 = 3-4 lbs additional impact force x 36,000 strides in the marathon
-- Calorie-dense snacks (PB balls, etc.) are budget-busters
-- Big training days ~4,100 cal, light days ~2,800 cal
-
-RECOVERY:
-- Sleep: bed 9pm, wake 4am. Deep+REM target: 3+ hours good, 4+ hours optimal
-- TSB management: overreaching at < -20. Race day target TSB: +5 to +15
-- Dallas 70.3 March 15 = full send race. Post-race skiing March 16-20 = forced recovery. Resume March 21.
-- Age 41 = longer recovery than younger athletes. 70.3 needs 7-10 days recovery.
-
-TAPER:
-- Begin 2-3 weeks pre-race (late March / early April)
-- Week 1 taper: volume -40%, maintain intensity in short openers
-- Race week: volume -70%, activation only
-- Last long ride: 3 weeks pre-race
-- Last quality run: 10-12 days pre-race
-
-PERIODIZATION & RACE CALENDAR (MANDATORY — check before EVERY recommendation):
-- Current phase: BUILD 1 (volume + threshold development)
-- Mar 15: Dallas 70.3 — FULL SEND A-race. The two weeks before (Mar 1-14) must protect for this race. NO Big Day, NO peak sessions in this window.
-- Mar 16-20: Skiing — forced recovery, no training
-- Mar 21-Apr 5: FINAL BUILD — this is when Big Day and peak sessions go
-- Mar 28: BIG DAY dress rehearsal (the ONLY scheduled Big Day)
-- Apr 6-17: TAPER
-- Apr 18: IRONMAN TEXAS — RACE DAY
-YOU MUST CHECK THIS CALENDAR before recommending any peak session or Big Day. If today is before Mar 15, the athlete is tapering into Dallas 70.3 — do NOT recommend peak efforts this week.
-
-CRITICAL ANALYSIS RULES:
-1. READ THE ATHLETE NOTES FIRST. If there is an injury or restriction (e.g., "no running until cleared"), do NOT recommend any activity that violates it. If running is restricted, recommend bike and swim alternatives instead. This overrides all other recommendations.
-2. You will receive BOTH today's brief AND a full week activity log. ALWAYS check the full week log before claiming something "hasn't been done." Many training elements (bricks, race nutrition, progressive power) happen on specific days, not every day. Brick runs are labeled "(BRICK)" in the activity log — search for this tag before claiming "no bricks."
-3. Distinguish between "not done today" and "not done this week." Only flag something as missing if it's absent from the ENTIRE week (or multiple weeks in trend data).
-4. You will receive a RACE CALENDAR with exact dates. NEVER recommend scheduling peak sessions, Big Days, or high-volume work that conflicts with taper windows or recovery periods. Check the calendar before every recommendation.
-5. Respect athlete constraints: this athlete NEVER takes rest days. NEVER recommend "rest days", "recovery days", or "days off." If recovery is needed, recommend easier doubles (easy spin + drill swim). This is non-negotiable.
-6. A 70.3 race at full effort counts as a training stimulus equivalent to a long run. Do not flag "no long run" in a race week.
-7. Use specific numbers from the data. Don't generalize. Reference actual watts, pace, TSS, and dates.
-8. Context matters for brick duration: brick runs BUILD progressively from 20-30 min early in the cycle toward 60-75 min by Big Day. A 28-min brick in BUILD 1 is appropriate progression — don't call it a "token effort" if we're 7 weeks from race day.
-9. When recommending next week's sessions, CHECK THE RACE CALENDAR. If a race is within 2 weeks, do NOT recommend peak volume. Protect the race.
-10. NEVER recommend more than 2 training sessions per day (excluding strength). Triple sessions are not part of this athlete's plan.
-11. Respect the TYPICAL WEEKLY SCHEDULE. Monday is recovery — do not recommend hard efforts on Monday. Saturday is long run day. Sunday is long bike day (no pool). Do not suggest swapping these unless the data shows a specific reason.
-12. The brief may contain swim data from Form Goggles (labeled "SWIM ANALYSIS (Form Goggles)" or "Form Goggles" in the week log). This is REAL swim data — count it. Do not claim the athlete hasn't swum if Form Goggles data shows a swim session.
-
-Given the daily brief data and any trend/plan context provided, evaluate:
-
-1. STRATEGIC DIRECTION: Is the overall training trajectory aligned with sub-10 Ironman preparation? Are we building the right systems at the right time?
-2. LONG RIDE PROGRAMMING: Are long rides reaching appropriate duration and including race-specific power blocks? Is the Big Day dress rehearsal scheduled?
-3. LONG RUN PROGRAMMING: Is the long run appropriately capped? On fresh legs? Progressive finish included?
-4. BRICK QUALITY: Are brick runs building toward 60-75 min at race pace? Or are they token 20-30 min jogs?
-5. RACE SPECIFICITY: How much time is being spent at actual Ironman race intensities (238W on bike, 8:33/mi on run)?
-6. WEIGHT TRAJECTORY: Is the athlete on track for 215 by race day? Is the caloric deficit being maintained?
-7. INJURY RISK: Run volume, back-to-back hard days, compensation patterns (GCT imbalance), vertical oscillation degradation, overreaching (TSB)?
-8. TAPER READINESS: Is CTL where it needs to be to begin taper? Will the taper timeline deliver TSB +5 to +15 by race day?
-9. RACE NUTRITION: Is on-bike and on-run fueling being practiced at race-level amounts?
-10. WHAT'S MISSING: What critical training elements are absent or underemphasized?
-
-Format your response EXACTLY as plain text (NOT JSON, NOT markdown):
-
-AUDIT VERDICT: [ON TRACK / CAUTION / OFF TRACK]
-
-TOP 3 CONCERNS:
-1. [Most critical issue with specific numbers]
-2. [Second most critical]
-3. [Third most critical]
-
-WHAT'S WORKING:
-- [Bullet points of things going well]
-
-DETAILED ASSESSMENT:
-[Numbered responses to each of the 10 evaluation areas. Be specific. Reference actual numbers from the brief. Don't be diplomatic — be direct about what's wrong.]
-
-RECOMMENDED ACTIONS (next 7 days):
-- [Specific, actionable items ranked by priority]"""
+    if not JSONBIN_API_KEY or not JSONBIN_COACHING_STATE_BIN_ID:
+        return jsonify({'error': 'Coaching state storage not configured'}), 500
+    try:
+        r = _jsonbin_request('GET', JSONBIN_COACHING_STATE_BIN_ID)
+        if r and r.ok:
+            data = r.json().get('record', {})
+            _coaching_state_cache['data'] = data
+            _coaching_state_cache['ts'] = now
+            return jsonify(data)
+        return jsonify({'error': 'Failed to read coaching state'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
-@app.route('/coaching-audit', methods=['POST'])
-def coaching_audit():
-    if not ANTHROPIC_API_KEY:
-        return jsonify({'error': 'ANTHROPIC_API_KEY not configured'}), 500
+@app.route('/coaching-state', methods=['POST'])
+def save_coaching_state():
+    """Update coaching state document (full replace or partial merge)."""
+    if not JSONBIN_API_KEY or not JSONBIN_COACHING_STATE_BIN_ID:
+        return jsonify({'error': 'Coaching state storage not configured'}), 500
     body = request.get_json(force=True) or {}
-    brief = body.get('brief', '')
-    if not brief:
-        return jsonify({'error': 'brief text required'}), 400
+    if not body:
+        return jsonify({'error': 'No data provided'}), 400
 
-    # Extract dynamic values for system prompt
-    weight = body.get('weight', 227)
-    days_to_race = body.get('days_to_race', 48)
-    weight_to_lose = max(0, round(weight - 215, 1))
-    deficit_per_day = round(weight_to_lose * 3500 / max(1, days_to_race)) if days_to_race > 0 else 750
-
-    athlete_notes = body.get('athlete_notes', 'No current restrictions.')
-    system_prompt = AUDIT_V2_SYSTEM_PROMPT.format(
-        weight=weight,
-        days_to_race=days_to_race,
-        weight_to_lose=weight_to_lose,
-        deficit_per_day=deficit_per_day,
-        athlete_notes=athlete_notes,
-    )
-
-    # Build user message with brief + full context
-    user_parts = [f"Here is today's daily coaching brief:\n\n{brief}"]
-
-    # Full week activity log (activity-by-activity, not just today)
-    week_summary = body.get('week_summary')
-    if week_summary:
-        user_parts.append(f"\n{week_summary}")
-    else:
-        user_parts.append("\n(No full-week activity log available — today's brief only)")
-
-    # 4-week trend data
-    trend_data = body.get('trend_data')
-    if trend_data:
-        user_parts.append(f"\nLast 4 weeks trend data:\n{trend_data}")
-
-    # Race calendar with taper windows (hardcoded — these are fixed dates)
-    from datetime import datetime as _dtc
-    from zoneinfo import ZoneInfo as _ZIc
-    ct_today = _dtc.now(_ZIc('America/Chicago')).strftime('%Y-%m-%d')
-    user_parts.append(f"""
-RACE CALENDAR & TAPER WINDOWS (today is {ct_today}):
-- Mar 15: Dallas 70.3 — FULL SEND A-race (counts as long run progression)
-- Mar 16-20: Skiing — forced recovery (no training)
-- Mar 21-Apr 5: FINAL BUILD (two critical weeks — Big Day goes here)
-- Mar 28: BIG DAY dress rehearsal — 5hr+ bike → 60-75min run, full race nutrition
-- Apr 6-17: TAPER (volume -40% week 1, -70% race week)
-- Apr 18: IRONMAN TEXAS — RACE DAY
-
-CRITICAL: Do NOT recommend scheduling Big Day or peak sessions within 2 weeks of Dallas 70.3 (Mar 15) or during taper (Apr 6+). The Big Day is specifically Mar 28.""")
-
-    # Training plan
-    plan_text = body.get('plan_text')
-    if plan_text:
-        user_parts.append(f"\nCurrent training plan for next 2 weeks:\n{plan_text}")
-
-    user_message = '\n'.join(user_parts)
-
-    for attempt in range(2):
+    # Support partial updates: merge into existing state
+    merge = request.args.get('merge', '').lower() == '1'
+    if merge:
         try:
-            resp = req_lib.post(
-                'https://api.anthropic.com/v1/messages',
-                headers={
-                    'x-api-key': ANTHROPIC_API_KEY,
-                    'anthropic-version': '2023-06-01',
-                    'content-type': 'application/json',
-                },
-                json={
-                    'model': 'claude-sonnet-4-20250514',
-                    'max_tokens': 4096,
-                    'system': system_prompt,
-                    'messages': [{'role': 'user', 'content': user_message}],
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data['content'][0]['text']
-            return jsonify({'audit_text': text, 'version': '2.0'})
-        except Exception as e:
-            if attempt == 0:
-                continue
-            return jsonify({'error': str(e), 'audit_text': None}), 500
+            r = _jsonbin_request('GET', JSONBIN_COACHING_STATE_BIN_ID)
+            if r and r.ok:
+                existing = r.json().get('record', {})
+                existing.update(body)
+                body = existing
+        except Exception:
+            pass  # Fall through to full replace
+
+    try:
+        r = _jsonbin_request('PUT', JSONBIN_COACHING_STATE_BIN_ID, json=body)
+        if r and r.ok:
+            _coaching_state_cache['data'] = body
+            _coaching_state_cache['ts'] = time.time()
+            return jsonify({'success': True})
+        return jsonify({'error': 'Failed to save coaching state'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/setup/create-coaching-state-bin', methods=['POST'])
+def create_coaching_state_bin():
+    """One-time setup: create a new JSONBin bin for coaching state."""
+    global JSONBIN_COACHING_STATE_BIN_ID
+    if JSONBIN_COACHING_STATE_BIN_ID:
+        return jsonify({'error': 'Coaching state bin already configured', 'bin_id': JSONBIN_COACHING_STATE_BIN_ID})
+    if not JSONBIN_API_KEY:
+        return jsonify({'error': 'JSONBIN_API_KEY not set'}), 500
+    body = request.get_json(force=True) or {}
+    initial_data = body if body else {'last_updated': None, 'this_week': {}, 'active_injuries': [], 'key_decisions': []}
+    try:
+        r = req_lib.post(
+            'https://api.jsonbin.io/v3/b',
+            headers={'X-Master-Key': JSONBIN_API_KEY, 'Content-Type': 'application/json', 'X-Bin-Name': 'imtx-coaching-state'},
+            json=initial_data, timeout=15,
+        )
+        r.raise_for_status()
+        bin_id = r.json()['metadata']['id']
+        JSONBIN_COACHING_STATE_BIN_ID = bin_id
+        return jsonify({'success': True, 'bin_id': bin_id, 'instruction': f'Set JSONBIN_COACHING_STATE_BIN_ID={bin_id} in Render environment variables'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ── Training Plan & Trends Storage ────────────────────────────
