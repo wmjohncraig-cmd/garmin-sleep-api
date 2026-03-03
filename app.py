@@ -1238,7 +1238,7 @@ PROTEIN_TARGET = 175
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
 # ── Coaching State (replaces audit) ──────────────────────────
-JSONBIN_COACHING_STATE_BIN_ID = os.environ.get('JSONBIN_COACHING_STATE_BIN_ID')
+JSONBIN_COACHING_STATE_BIN_ID = os.environ.get('JSONBIN_COACHING_STATE_BIN_ID', '69a76e9943b1c97be9b099c0')
 
 _coaching_state_cache = {'data': None, 'ts': 0}
 
@@ -1285,7 +1285,7 @@ def save_coaching_state():
             pass  # Fall through to full replace
 
     try:
-        r = _jsonbin_request('PUT', JSONBIN_COACHING_STATE_BIN_ID, json=body)
+        r = _jsonbin_request('PUT', JSONBIN_COACHING_STATE_BIN_ID, data=body)
         if r and r.ok:
             _coaching_state_cache['data'] = body
             _coaching_state_cache['ts'] = time.time()
