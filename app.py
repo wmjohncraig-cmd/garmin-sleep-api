@@ -372,6 +372,7 @@ def get_withings_weight():
             latest_ts = grp['date']
 
     date_str = date.fromtimestamp(latest_ts).isoformat() if latest_ts else date.today().isoformat()
+    hour_utc = int(latest_ts) % 86400 // 3600 if latest_ts else 0
 
     weight_kg = metrics.get('weight_kg')
     weight_lbs = round(weight_kg * 2.20462, 1) if weight_kg else None
@@ -379,6 +380,7 @@ def get_withings_weight():
     result = {
         'weight_lbs': weight_lbs,
         'date': date_str,
+        'hour_utc': hour_utc,
         'unit': 'lbs',
         'source': 'withings',
         'body_fat_pct': round(metrics['body_fat_pct'], 1) if 'body_fat_pct' in metrics else None,
@@ -753,8 +755,11 @@ def withings_weight_history():
                         print(f"[WEIGHT FILTER] History rejected: {weight_lbs} lbs on {d}")
                         continue
                     d = date.fromtimestamp(grp['date']).isoformat()
-                    by_date[d] = weight_lbs
-        result = [{'date': d, 'weight_lbs': w} for d, w in sorted(by_date.items())]
+                    hour_utc = int(grp.get('date', 0)) % 86400 // 3600
+                    # Prefer earliest reading per day (morning/fasted)
+                    if d not in by_date or hour_utc < by_date[d]['hour_utc']:
+                        by_date[d] = {'weight_lbs': weight_lbs, 'hour_utc': hour_utc}
+        result = [{'date': d, 'weight_lbs': v['weight_lbs'], 'hour_utc': v['hour_utc']} for d, v in sorted(by_date.items())]
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
