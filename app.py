@@ -1033,6 +1033,117 @@ def eight_sleep_sleep():
         return jsonify({'error': err_msg, 'traceback': tb}), 500
 
 
+@app.route('/eight-sleep/debug')
+def eight_sleep_debug():
+    """Debug endpoint: dump raw Eight Sleep interval data to identify HRV field mapping."""
+    if not EIGHT_SLEEP_EMAIL or not EIGHT_SLEEP_PASSWORD:
+        return jsonify({'error': 'Eight Sleep not configured'}), 500
+    try:
+        token, user_id = _eight_sleep_auth()
+        from datetime import datetime as _dt8
+        from zoneinfo import ZoneInfo as _ZI8
+        ct = _dt8.now(_ZI8('America/Chicago'))
+        date_from = (ct - timedelta(days=2)).strftime('%Y-%m-%d')
+        date_to = (ct + timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # Fetch both trends and intervals
+        trends = _eight_api(
+            f'/users/{user_id}/trends?tz=America/Chicago&from={date_from}&to={date_to}'
+            '&include-main=false&include-all-sessions=true&model-version=v2',
+            token
+        )
+        intervals = _eight_api(
+            f'/users/{user_id}/intervals?tz=America/Chicago&from={date_from}&to={date_to}',
+            token
+        )
+
+        # Extract key info
+        days = trends.get('days', []) if isinstance(trends, dict) else trends if isinstance(trends, list) else []
+        interval_list = intervals.get('intervals', []) if isinstance(intervals, dict) else intervals if isinstance(intervals, list) else []
+
+        debug = {
+            'trends_days': [],
+            'intervals': [],
+        }
+
+        for day in sorted(days, key=lambda d: d.get('day', ''), reverse=True):
+            day_info = {
+                'day': day.get('day'),
+                'score': day.get('score'),
+                'incomplete': day.get('incomplete'),
+                'all_trend_keys': list(day.keys()),
+            }
+            # Check if trends have HRV-related fields
+            for k in day.keys():
+                v = day[k]
+                if 'hrv' in k.lower() or 'rmssd' in k.lower() or 'sdnn' in k.lower():
+                    day_info[f'trend_{k}'] = v
+            debug['trends_days'].append(day_info)
+
+        for intv in sorted(interval_list, key=lambda i: i.get('ts', ''), reverse=True):
+            ts_data = intv.get('timeseries', {})
+            intv_info = {
+                'ts': intv.get('ts'),
+                'id': intv.get('id'),
+                'timeseries_keys': list(ts_data.keys()) if isinstance(ts_data, dict) else 'not_a_dict',
+                'interval_top_keys': list(intv.keys()),
+            }
+            # Check ALL top-level interval fields for HRV-related data
+            for k in intv.keys():
+                if k == 'timeseries':
+                    continue
+                v = intv[k]
+                if isinstance(k, str) and ('hrv' in k.lower() or 'rmssd' in k.lower() or 'sdnn' in k.lower()):
+                    intv_info[f'interval_{k}'] = v
+
+            # Sample the hrv timeseries
+            hrv_series = ts_data.get('hrv', [])
+            if hrv_series:
+                hrv_vals = [v[1] for v in hrv_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None and v[1] > 0]
+                intv_info['hrv_timeseries_count'] = len(hrv_series)
+                intv_info['hrv_valid_count'] = len(hrv_vals)
+                if hrv_vals:
+                    intv_info['hrv_min'] = round(min(hrv_vals), 1)
+                    intv_info['hrv_max'] = round(max(hrv_vals), 1)
+                    intv_info['hrv_mean'] = round(sum(hrv_vals) / len(hrv_vals), 1)
+                    sorted_v = sorted(hrv_vals)
+                    mid = len(sorted_v) // 2
+                    intv_info['hrv_median'] = round(sorted_v[mid] if len(sorted_v) % 2 else (sorted_v[mid-1] + sorted_v[mid]) / 2, 1)
+                    intv_info['hrv_sample_first_5'] = hrv_series[:5]
+                    intv_info['hrv_sample_last_5'] = hrv_series[-5:]
+                    # Distribution buckets
+                    buckets = {'0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0, '100-150': 0, '150+': 0}
+                    for v in hrv_vals:
+                        if v < 20: buckets['0-20'] += 1
+                        elif v < 40: buckets['20-40'] += 1
+                        elif v < 60: buckets['40-60'] += 1
+                        elif v < 80: buckets['60-80'] += 1
+                        elif v < 100: buckets['80-100'] += 1
+                        elif v < 150: buckets['100-150'] += 1
+                        else: buckets['150+'] += 1
+                    intv_info['hrv_distribution'] = buckets
+
+            # Also check for other HRV-like fields in timeseries
+            for ts_key in ts_data.keys():
+                if ts_key == 'hrv':
+                    continue
+                if 'hrv' in ts_key.lower() or 'rmssd' in ts_key.lower() or 'sdnn' in ts_key.lower():
+                    series = ts_data[ts_key]
+                    vals = [v[1] for v in series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None]
+                    intv_info[f'ts_{ts_key}_count'] = len(series)
+                    if vals:
+                        intv_info[f'ts_{ts_key}_min'] = round(min(vals), 1)
+                        intv_info[f'ts_{ts_key}_max'] = round(max(vals), 1)
+                        intv_info[f'ts_{ts_key}_mean'] = round(sum(vals) / len(vals), 1)
+                        intv_info[f'ts_{ts_key}_sample'] = series[:3]
+
+            debug['intervals'].append(intv_info)
+
+        return jsonify(debug)
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
 @app.route('/garmin-sleep')
 def garmin_sleep():
     try:
