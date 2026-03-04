@@ -929,21 +929,14 @@ def eight_sleep_sleep():
             for intv in sorted(interval_list, key=lambda i: i.get('ts', ''), reverse=True):
                 ts_data = intv.get('timeseries', {})
 
-                # HRV — use median to avoid outlier spikes inflating the value
-                hrv_series = ts_data.get('hrv', [])
+                # HRV — use 'rmssd' field (matches Eight Sleep app display)
+                # The 'hrv' field is an internal metric (SDNN-like, ~100-150ms)
+                # The 'rmssd' field is actual RMSSD shown in the Eight Sleep app (~30-40ms)
+                hrv_series = ts_data.get('rmssd', [])
                 if hrv_series:
                     hrv_vals = [v[1] for v in hrv_series if isinstance(v, (list, tuple)) and len(v) > 1 and v[1] is not None and v[1] > 0]
                     if hrv_vals:
-                        # Use median instead of mean — HRV timeseries can have outlier spikes
-                        sorted_hrv = sorted(hrv_vals)
-                        mid = len(sorted_hrv) // 2
-                        median_hrv = sorted_hrv[mid] if len(sorted_hrv) % 2 else (sorted_hrv[mid-1] + sorted_hrv[mid]) / 2
-                        # Filter out values >3x median (outlier spikes)
-                        filtered = [v for v in hrv_vals if v <= median_hrv * 3]
-                        if filtered:
-                            hrv_avg = round(sum(filtered) / len(filtered), 1)
-                        else:
-                            hrv_avg = round(median_hrv, 1)
+                        hrv_avg = round(sum(hrv_vals) / len(hrv_vals), 1)
 
                 # Heart rate
                 hr_series = ts_data.get('heartRate', [])
